@@ -5,7 +5,7 @@ import math
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
 
 from .panel import PanelWidget
 
@@ -76,24 +76,40 @@ class DashWidget(PanelWidget):
     TITLE = "Dash"
     HAS_HEADER = False
     MIN_WIDTH = 180
+    FAST_CAPABLE = True
 
     def __init__(self, ctx):
         self._rpm_max = 0.0
         super().__init__(ctx)
 
+    def _make_view(self, rpm, speed, gear, limiter):
+        self._rpm_max = max(self._rpm_max * 0.9995, rpm, 6000.0)
+        mph = self.cfg.get("unit", "kmh") == "mph"
+        spd = speed * (2.23694 if mph else 3.6)
+        frac = rpm / self._rpm_max if self._rpm_max else 0.0
+        shift = frac >= float(self.cfg.get("shift_pct", 0.94))
+        g = "R" if gear < 0 else "N" if gear == 0 else str(gear)
+        return (g, f"{spd:.0f}", "mph" if mph else "km/h", round(frac, 3), shift, limiter)
+
     def content_key(self, snap):
+        if self.fast_active():
+            return ("fast", self.width())
         p = snap.player
         if p is None or not p.valid:
             self._view = None
             return None
-        self._rpm_max = max(self._rpm_max * 0.9995, p.rpm, 6000.0)
-        mph = self.cfg.get("unit", "kmh") == "mph"
-        spd = p.speed * (2.23694 if mph else 3.6)
-        frac = p.rpm / self._rpm_max if self._rpm_max else 0.0
-        shift = frac >= float(self.cfg.get("shift_pct", 0.94))
-        gear = "R" if p.gear < 0 else "N" if p.gear == 0 else str(p.gear)
-        self._view = (gear, f"{spd:.0f}", "mph" if mph else "km/h", round(frac, 2), shift, p.limiter)
+        self._view = self._make_view(p.rpm, p.speed, p.gear, p.limiter)
         return (self._view, self.width())
+
+    def fast_tick(self, timing) -> bool:
+        f = timing.frame
+        rpm = float(f.get("RPM", 0.0) or 0.0)
+        view = self._make_view(rpm, float(f.get("Speed", 0.0) or 0.0), int(f.get("Gear", 0) or 0),
+                               bool(int(f.get("EngineWarnings", 0) or 0) & 0x10))
+        if view == self._view:
+            return False
+        self._view = view
+        return True
 
     def desired_height(self) -> int:
         return int(self.fonts.em_base * 4.6)
@@ -134,8 +150,16 @@ class InputsWidget(PanelWidget):
     HEIGHT_MODE = "free"
     MIN_WIDTH = 160
     MIN_HEIGHT = 40
+    FAST_CAPABLE = True
+    KEYS = ("throttle", "brake", "clutch", "steer", "abs")
+
+    def __init__(self, ctx):
+        self._seq = -1
+        super().__init__(ctx)
 
     def content_key(self, snap):
+        if self.fast_active():  # gyvai piešia fast_tick (60 Hz), momentinė būsena nereikalinga
+            return ("fast", self.width(), self.height())
         p = snap.player
         if p is None or not p.valid:
             self._view = None
@@ -143,8 +167,20 @@ class InputsWidget(PanelWidget):
         n = int(float(self.cfg.get("seconds", 4.0)) * 60)
         tr = {k: v[-n:] for k, v in (p.inputs or {}).items()}
         self._view = (tr, round(p.throttle, 2), round(p.brake, 2), round(p.clutch, 2), p.abs_active)
-        # trace keičiasi kiekviename kadre - perpiešiam visada (valdiklis įjungtas tik kai reikia)
         return (len(tr.get("throttle", ())), p.t, self.width(), self.height())
+
+    def fast_tick(self, timing) -> bool:
+        pl = timing.player
+        if pl.inp_seq == self._seq:
+            return False  # naujo mėginio nėra (pauzė) - neperpiešiam
+        self._seq = pl.inp_seq
+        n = int(float(self.cfg.get("seconds", 4.0)) * 60)
+        arr = pl.input_trace(n)
+        if arr is None:
+            return False
+        tr = dict(zip(self.KEYS, arr))
+        self._view = (tr, float(arr[0, -1]), float(arr[1, -1]), float(arr[2, -1]), bool(arr[4, -1] > 0.5))
+        return True
 
     def desired_height(self) -> int:
         return int(self.fonts.em_base * 6)
@@ -155,33 +191,56 @@ class InputsWidget(PanelWidget):
         tr, thr, brk, clu, abs_on = self._view
         r = QRectF(self.rect())
         pal = self.pal
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(pal.bg)
-        p.drawRoundedRect(r, pal.radius, pal.radius)
         pad = self.pad()
         bars = self.cfg.get("show_bars", True)
         bw = r.height() * 0.13 if bars else 0
         nbars = 3 if self.cfg.get("show_clutch") else 2
         graph = QRectF(pad, pad, r.width() - 2 * pad - (bw * nbars + pad * nbars if bars else 0), r.height() - 2 * pad)
-        p.setPen(QPen(pal.row_alt, 1))
-        for k in (0.25, 0.5, 0.75):
-            yy = graph.bottom() - graph.height() * k
-            p.drawLine(QPointF(graph.left(), yy), QPointF(graph.right(), yy))
+        # fonas, tinklelis ir juostų pagrindai nesikeičia - paruošiami vieną kartą
+        bkey = (self.width(), self.height(), bars, nbars, id(pal), self.devicePixelRatioF())
+        if getattr(self, "_bg_key", None) != bkey:
+            from PySide6.QtGui import QPixmap
+            dpr = self.devicePixelRatioF()
+            pm = QPixmap(int(self.width() * dpr), int(self.height() * dpr))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.GlobalColor.transparent)
+            q = QPainter(pm)
+            q.setRenderHint(QPainter.RenderHint.Antialiasing)
+            q.setPen(Qt.PenStyle.NoPen)
+            q.setBrush(pal.bg)
+            q.drawRoundedRect(r, pal.radius, pal.radius)
+            q.setPen(QPen(pal.row_alt, 1))
+            for k in (0.25, 0.5, 0.75):
+                yy = graph.bottom() - graph.height() * k
+                q.drawLine(QPointF(graph.left(), yy), QPointF(graph.right(), yy))
+            if bars:
+                x = graph.right() + pad
+                q.setPen(Qt.PenStyle.NoPen)
+                q.setBrush(pal.track)
+                for _ in range(nbars):
+                    q.drawRoundedRect(QRectF(x, graph.top(), bw, graph.height()), 2, 2)
+                    x += bw + pad
+            q.end()
+            self._bg_pm, self._bg_key = pm, bkey
+        p.drawPixmap(0, 0, self._bg_pm)
+
+        pen_w = max(1.5, self._scale() * 1.8)
 
         def trace(vals, color, center=False, scale=1.0):
             if vals is None or len(vals) < 2:
                 return
             n = len(vals)
-            xs = graph.left() + np.arange(n) * graph.width() / max(1, n - 1)
-            v = np.clip(vals * scale, -1, 1) if center else np.clip(vals, 0, 1)
+            # ne daugiau taškų nei pikselių: pigu piešti net 60 kartų per sekundę
+            m = int(min(n, max(2, graph.width() / 3.0)))
+            idx = np.linspace(0, n - 1, m).astype(np.int32)
+            v = vals[idx]
+            v = np.clip(v * scale, -1, 1) if center else np.clip(v, 0, 1)
+            xs = graph.left() + np.arange(m) * (graph.width() / max(1, m - 1))
             ys = graph.center().y() - v * graph.height() / 2 if center else graph.bottom() - v * graph.height()
-            step = max(1, n // int(max(graph.width(), 1)))
-            path = QPainterPath(QPointF(xs[0], ys[0]))
-            for x, y in zip(xs[::step], ys[::step]):
-                path.lineTo(x, y)
-            p.setPen(QPen(color, max(1.5, self._scale() * 1.8)))
+            poly = QPolygonF(list(map(QPointF, xs.tolist(), ys.tolist())))
+            p.setPen(QPen(color, pen_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap, Qt.PenJoinStyle.BevelJoin))
             p.setBrush(Qt.BrushStyle.NoBrush)
-            p.drawPath(path)
+            p.drawPolyline(poly)
 
         if self.cfg.get("show_steering", True):
             trace(tr.get("steer"), QColor(200, 200, 210, 150), center=True, scale=1 / 2.5)
@@ -194,14 +253,11 @@ class InputsWidget(PanelWidget):
             vals = [(thr, pal.good), (brk, pal.yellow if abs_on else pal.bad)]
             if nbars == 3:
                 vals.append((clu, pal.blue))
+            p.setPen(Qt.PenStyle.NoPen)
             for v, col in vals:
-                rect = QRectF(x, graph.top(), bw, graph.height())
-                p.setPen(Qt.PenStyle.NoPen)
-                p.setBrush(pal.header)
-                p.drawRoundedRect(rect, 2, 2)
-                h = rect.height() * max(0.0, min(1.0, v))
-                p.setBrush(col)
-                p.drawRoundedRect(QRectF(rect.x(), rect.bottom() - h, bw, h), 2, 2)
+                h = graph.height() * max(0.0, min(1.0, v))
+                if h > 0.5:
+                    p.fillRect(QRectF(x, graph.bottom() - h, bw, h), col)
                 x += bw + pad
 
 
@@ -266,7 +322,7 @@ class GForceWidget(PanelWidget):
 
 def _temp_color(pal, t):
     if not math.isfinite(t):
-        return pal.header
+        return pal.track
     if t < 65:
         return pal.blue
     if t < 80:

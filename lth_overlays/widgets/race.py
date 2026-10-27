@@ -28,6 +28,7 @@ class FlagsWidget(PanelWidget):
         "debris": ((250, 205, 20), (180, 30, 30)), "blue": ((30, 110, 230), (255, 255, 255)),
         "white": ((245, 245, 245), (20, 20, 20)), "checkered": ((245, 245, 245), (10, 10, 10)),
         "one_to_green": ((40, 170, 80), (255, 255, 255)), "green": ((40, 170, 80), (255, 255, 255)),
+        "formation": ((40, 44, 52), (255, 255, 255)),
     }
     # vėliavos, kurios trumpos (mirksi) - jas laikome bent `hold` sekundžių
     SHORT = {"blue", "yellow", "yellow_waving", "debris", "black", "repair"}
@@ -41,6 +42,11 @@ class FlagsWidget(PanelWidget):
         t = snap.t
         hold = float(self.cfg.get("hold", 4.0))
         active = {k: txt for k, txt in (p.flags if p is not None else ())}
+        if "blue" in active and not self._blue_is_real(snap):
+            del active["blue"]
+        if p is not None and 0 <= p.pace_mode <= 3 and not any(k in active for k in ("one_to_green", "caution",
+                                                                                    "caution_waving", "red")):
+            active["formation"] = "FORMATION LAP"
         for k, txt in active.items():
             first = self._seen.get(k, (t, t, txt))[0]
             self._seen[k] = (first, t, txt)
@@ -58,10 +64,26 @@ class FlagsWidget(PanelWidget):
         self._view = show
         return (show, self.width())
 
+    def _blue_is_real(self, snap) -> bool:
+        """Mėlyna rodoma tik jei už manęs tikrai yra mašina, kuri lenkia ratu arba greitesnės klasės."""
+        if snap.session_type != "race":
+            return bool(self.cfg.get("blue_outside_race"))
+        me = next((r for r in snap.cars if r.is_me), None)
+        my_lap = (snap.classes.get(me.class_id, {}) or {}).get("est_lap") if me is not None else None
+        for r in snap.relative:
+            if r.is_me or not (-3.5 <= r.gap < 0):
+                continue
+            if r.lap_rel > 0:
+                return True
+            other = (snap.classes.get(r.car.class_id, {}) or {}).get("est_lap")
+            if me is not None and r.car.class_id != me.class_id and other and my_lap and other < my_lap * 0.99:
+                return True
+        return False
+
     @staticmethod
     def _rank(key):
         order = ("disqualify", "black", "repair", "red", "caution_waving", "caution", "yellow_waving", "yellow",
-                 "debris", "blue", "white", "checkered", "one_to_green", "green")
+                 "debris", "blue", "white", "checkered", "one_to_green", "formation", "green")
         return order.index(key) if key in order else 99
 
     def desired_height(self) -> int:

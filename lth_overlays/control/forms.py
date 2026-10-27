@@ -161,7 +161,7 @@ class WidgetForm(QWidget):
     def _geo(self, what, v):
         c = self.cfg
         w = self.ctx.widgets[self.name]
-        c["x"], c["y"] = w.x(), w.y()
+        c["x"], c["y"], c["pos_v"] = w.x(), w.y(), 2
         if what == "x":
             c["x"] = int(v)
         elif what == "y":
@@ -181,10 +181,8 @@ class WidgetForm(QWidget):
         QTimer.singleShot(0, self.refresh_geometry)
 
     def _center(self):
-        self.cfg["x"] = -1
+        self.ctx.widgets[self.name].center_on_screen()
         self.ctx.widget_changed(self.name)
-        w = self.ctx.widgets[self.name]
-        self.cfg["x"] = w.x()
         QTimer.singleShot(0, self.refresh_geometry)
 
     def refresh_geometry(self):

@@ -35,6 +35,7 @@ from .frame import (MAX_CARS, STATE_CHECKERED, STATE_RACING, SURF_NOT_IN_WORLD,
                     SURF_OFF_TRACK, Frame)
 from .player import PlayerTracker
 from .sessioninfo import SessionModel
+from .rain_tips import RainCaller
 from .trackmap import TrackMap
 from .weather import WeatherTracker
 
@@ -132,6 +133,7 @@ class Snapshot:
     pit: dict = field(default_factory=dict)  # lane_loss, stop_loss, samples
     battle: list = field(default_factory=list)  # sektorių palyginimas su mašinomis šalia
     sof: dict = field(default_factory=dict)  # klasė -> SOF (0 = bendras)
+    rain_call: object = None  # rain_tips.RainCall arba None
     car_pct: object = None  # np.ndarray: kiekvienos mašinos rato dalis šiame kadre (trasos žemėlapiui)
 
 
@@ -139,6 +141,7 @@ class TimingEngine:
     def __init__(self, point_spacing_m: float = POINT_SPACING_M, history_laps: int = HISTORY_LAPS,
                  rate_hz: float = 20.0, standings_hz: float = 2.0, maps_dir: str | None = None):
         self.player = PlayerTracker()
+        self.rain = RainCaller()
         self.trackmap = TrackMap(maps_dir)
         self.pit_losses = []
         self._min_dt = 1.0 / rate_hz - 0.004 if rate_hz < 60 else 0.0
@@ -485,6 +488,11 @@ class TimingEngine:
         snap.sof, snap.battle, snap.pit = dc[1], dc[2], dc[3]
         pct = f.CarIdxLapDistPct
         snap.car_pct = None if pct is None else np.array(pct, dtype=np.float32)
+        w, pl = snap.weather, snap.player
+        if w is not None and w.valid and pl is not None:
+            close = any(0 < r.gap < 1.0 for r in snap.relative if not r.is_me)
+            snap.rain_call = self.rain.update(t, w.wetness, w.trend, w.precipitation, pl.tyre_compound,
+                                              pl.on_pit_road, close)
         return snap
 
     # ------------------------------------------------------------------

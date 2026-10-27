@@ -25,6 +25,7 @@ CAR_VARS = (
     ("CarIdxTireCompound", np.int32),
     ("CarIdxPaceRow", np.int32),
     ("CarIdxPaceLine", np.int32),
+    ("CarIdxSessionFlags", np.int32),  # kiekvienos mašinos vėliavos (mėlyna, juoda, meatball...)
 )
 
 SCALAR_VARS = (

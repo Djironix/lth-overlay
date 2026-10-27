@@ -18,7 +18,7 @@ EDGE = 7  # krašto zona redaguojant (px)
 CORNER = 16  # kampo zona
 MIN_SCALE, MAX_SCALE = 0.5, 3.0
 
-_CURSORS = {"l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
+_CURSORS = {"gear": Qt.CursorShape.PointingHandCursor, "l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
             "t": Qt.CursorShape.SizeVerCursor, "b": Qt.CursorShape.SizeVerCursor,
             "tl": Qt.CursorShape.SizeFDiagCursor, "br": Qt.CursorShape.SizeFDiagCursor,
             "tr": Qt.CursorShape.SizeBDiagCursor, "bl": Qt.CursorShape.SizeBDiagCursor,
@@ -35,6 +35,7 @@ class OverlayWidget(QWidget):
     # (viršaus / apačios kraštas tada keičia viso valdiklio dydį).
     HEIGHT_MODE = "auto"
     preview_mode = False  # Control Center peržiūros kopija: be redagavimo rėmelio
+    FAST_CAPABLE = False  # valdiklis moka fast_tick(): savo laikmatis (iki 60 Hz) tiesiai iš variklio
 
     def __init__(self, ctx):
         flags = (Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
@@ -66,6 +67,8 @@ class OverlayWidget(QWidget):
         self.pal = Palette(self.ctx.theme, c.get("opacity", 1.0), self.ctx.config.data.get("custom_colors"))
         self._key = object()  # priverstinis perpiešimas
         self._place()
+        if hasattr(self, "_native_ready"):
+            self._update_fast()
         if self._snap is not None:
             self.push(self._snap, force=True)
 
@@ -115,24 +118,55 @@ class OverlayWidget(QWidget):
         return max(self.min_width(), int(round(int(self.cfg.get("width", 300)) * self._scale())))
 
     def _place(self):
+        """Padėtis iš nustatymų. Nuo v0.5 x / y - absoliučios virtualaus darbalaukio koordinatės
+        (pos_v = 2), todėl veikia bet kuriame monitoriuje, taip pat kairėje nuo pagrindinio
+        (neigiamos koordinatės). Senas formatas (be pos_v): neigiamas = nuo pagrindinio ekrano
+        dešinio / apatinio krašto, -1 = centre - paverčiamas vieną kartą."""
+        c = self.cfg
+        w = self.target_width()
+        h = max(self.height(), 20)
+        if int(c.get("pos_v", 1) or 1) < 2:
+            self._migrate_position(w)
+        x, y = int(c.get("x", 0)), int(c.get("y", 0))
+        scr = self.ctx.screen_for_rect(QRect(x, y, w, h))
+        if scr is None:  # monitorius atjungtas: rodom pagrindiniame, nustatymų nekeičiam
+            scr = self.ctx.screen_rect()
+            x = min(max(x, scr.left()), scr.right() + 1 - w) if w < scr.width() else scr.left()
+            y = min(max(y, scr.top()), scr.bottom() - 20)
+        else:  # neišlįsti už to monitoriaus kraštų
+            if x + w > scr.right() + 1:
+                x = max(scr.left(), scr.right() + 1 - w)
+            x = max(x, scr.left())
+            y = min(max(y, scr.top()), scr.bottom() - 20)
+        self.setGeometry(x, y, w, h)
+
+    def _migrate_position(self, w):
         c = self.cfg
         scr = self.ctx.screen_rect()
-        w = self.target_width()
         x, y = int(c.get("x", 0)), int(c.get("y", 0))
         if x == -1:
             x = scr.x() + (scr.width() - w) // 2
-        elif x < 0:  # prisegta prie dešinio krašto: platėja į kairę
+        elif x < 0:
             x = scr.x() + scr.width() + x - max(0, w - int(c.get("width", 300)))
+        else:
+            x = scr.x() + x
         if y < 0:
             y = scr.y() + scr.height() + y
-        # neišlįsti už ekrano dešinio krašto
-        if x + w > scr.x() + scr.width():
-            x = max(scr.x(), scr.x() + scr.width() - w)
-        self.setGeometry(x, y, w, max(self.height(), 20))
+        else:
+            y = scr.y() + y
+        c["x"], c["y"], c["pos_v"] = int(x), int(y), 2
+
+    def center_on_screen(self):
+        """Centruoja horizontaliai monitoriuje, kuriame dabar yra."""
+        scr = self.ctx.screen_for_rect(self.geometry()) or self.ctx.screen_rect()
+        self.cfg["x"] = scr.x() + (scr.width() - self.width()) // 2
+        self.cfg["y"] = self.y()
+        self.cfg["pos_v"] = 2
+        self.apply_settings()
 
     def save_geometry(self):
         c = self.cfg
-        c["x"], c["y"] = self.x(), self.y()
+        c["x"], c["y"], c["pos_v"] = self.x(), self.y(), 2
         c["width"] = int(round(self.width() / self._scale()))
         if self.HEIGHT_MODE != "auto" and c.get("height"):
             c["height"] = int(round(self.height() / self._scale()))
@@ -150,7 +184,7 @@ class OverlayWidget(QWidget):
         key = (font_key, text)
         st = self._texts.get(key)
         if st is None:
-            if len(self._texts) > 4000:
+            if len(self._texts) > 1500:  # riba atminčiai (ilgos lenktynės)
                 self._texts.clear()
             font = getattr(self.fonts, font_key)
             st = QStaticText(text)
@@ -216,11 +250,27 @@ class OverlayWidget(QWidget):
         p.setBrush(pal.header)
         p.drawRoundedRect(QRectF(0, 0, r.width(), hh), rad, rad)
         p.fillRect(QRectF(0, hh - rad, r.width(), rad), pal.header)
-        if pal.lumina:  # modernus: raudona žymė kairėje, baltas pavadinimas
+        style = pal.header_style
+        if style == "marker":  # modernus: akcento žymė kairėje, baltas pavadinimas
             p.fillRect(QRectF(0, hh * 0.2, 3, hh * 0.6), pal.accent)
             p.setPen(pal.text)
             self.draw_text(p, QRectF(12, 0, r.width() - 24, hh), title, "tiny")
-        else:
+        elif style == "gold":  # LTH: aukso gradiento linija apačioje, auksinis pavadinimas
+            from PySide6.QtGui import QLinearGradient
+            g = QLinearGradient(0, 0, r.width(), 0)
+            g.setColorAt(0.0, QColor(251, 208, 105))
+            g.setColorAt(1.0, QColor(209, 160, 58))
+            p.fillRect(QRectF(0, hh - 2, r.width(), 2), g)
+            p.fillRect(QRectF(0, hh * 0.22, 3, hh * 0.56), g)
+            p.setPen(pal.accent)
+            self.draw_text(p, QRectF(12, 0, r.width() - 24, hh), title, "tiny")
+        elif style == "solid":  # TV grafika: antraštė visa akcento spalvos, baltas tekstas
+            p.setPen(pal.text)
+            self.draw_text(p, QRectF(10, 0, r.width() - 20, hh), title, "tiny")
+        elif style == "plain":
+            p.setPen(pal.text)
+            self.draw_text(p, QRectF(10, 0, r.width() - 20, hh), title, "tiny")
+        else:  # "line"
             p.fillRect(QRectF(0, hh - 2, r.width(), 2), pal.accent)
             p.setPen(pal.accent)
             self.draw_text(p, QRectF(10, 0, r.width() - 20, hh), title, "tiny")
@@ -246,7 +296,7 @@ class OverlayWidget(QWidget):
     def push(self, snap, force=False):
         self._snap = snap
         key = self.content_key(snap)
-        if not force and key == self._key and not self.editing:
+        if not force and key == self._key:
             return
         self._key = key
         if self.width() < self.min_width():  # įjungti nauji stulpeliai / platesnis šriftas
@@ -262,6 +312,58 @@ class OverlayWidget(QWidget):
         if not self._native_ready:
             win32.make_overlay(self, click_through=not self.editing)
             self._native_ready = True
+        self._update_fast()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self._update_fast()
+
+    # ---------------- greitas kelias (Inputs, Dash...) ----------------
+    def fast_hz(self) -> int:
+        if not self.FAST_CAPABLE or self.preview_mode or not self.cfg.get("smooth", True):
+            return 0
+        return int(self.cfg.get("smooth_hz", 60) or 60)
+
+    def _update_fast(self):
+        hz = self.fast_hz() if self.isVisible() else 0
+        t = getattr(self, "_fast_timer", None)
+        if hz <= 0:
+            if t is not None:
+                t.stop()
+            return
+        if t is None:
+            from PySide6.QtCore import QTimer
+            t = self._fast_timer = QTimer(self)
+            t.setTimerType(Qt.TimerType.PreciseTimer)
+            t.timeout.connect(self._on_fast)
+        t.setInterval(max(8, int(1000 / hz)))
+        if not t.isActive():
+            t.start()
+
+    def fast_source(self):
+        """Gyvas laiko variklis (None - be iRacing: tada piešiama iš momentinės būsenos)."""
+        eng = getattr(self.ctx, "engine", None)
+        timing = getattr(eng, "timing", None)
+        if timing is None or not getattr(eng, "connected", False) or timing.frame is None:
+            return None
+        return timing
+
+    def fast_active(self) -> bool:
+        t = getattr(self, "_fast_timer", None)
+        return t is not None and t.isActive() and self.fast_source() is not None
+
+    def _on_fast(self):
+        timing = self.fast_source()
+        if timing is None:
+            return
+        try:
+            if self.fast_tick(timing):
+                self.update()
+        except Exception:  # noqa: BLE001 - laikmatis neturi nulaužti programos
+            pass
+
+    def fast_tick(self, timing) -> bool:
+        return False
 
     def set_editing(self, on: bool):
         self.editing = on
@@ -298,23 +400,57 @@ class OverlayWidget(QWidget):
             self._paint_edit(p)
         p.end()
 
+    # ---------------- redagavimo rėmelis ----------------
+    def _edit_font(self):
+        f = getattr(self, "_edit_f", None)
+        if f is None:
+            from .control.style import ui_font
+            from PySide6.QtGui import QFont, QFontMetricsF
+            f = ui_font(11, QFont.Weight.DemiBold)
+            self._edit_f = f
+            self._edit_m = QFontMetricsF(f)
+        return f
+
+    def _edit_rects(self):
+        """(pavadinimo juostelė, Settings mygtukas) - fiksuoto dydžio, nepriklauso nuo valdiklio mastelio."""
+        self._edit_font()
+        m = self._edit_m
+        size = f"{self.width()}×{self.height()} · {self._scale() * 100:.0f}%"
+        label = f"{self.TITLE}  {size}"
+        w = self.width()
+        tw = m.horizontalAdvance(label) + 18
+        full = m.horizontalAdvance("Settings") + 34
+        room = w - 4 - CORNER - 2  # iki viršutinio dešinio kampo rankenėlės
+        gw = full if tw + 6 + full <= room or room - full - 6 >= 90 else 26
+        cw = max(40, min(tw, room - gw - 6))
+        chip = QRectF(4, 4, cw, 22)
+        gear = QRectF(chip.right() + 6, 4, gw, 22)
+        return chip, gear, label
+
     def _paint_edit(self, p: QPainter):
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        gold = self.pal.edit
+        gold = QColor(236, 190, 88)
         p.setPen(QPen(gold, 1.5, Qt.PenStyle.DashLine))
-        p.setBrush(QColor(226, 177, 60, 22))
+        p.setBrush(QColor(236, 190, 88, 22))
         p.drawRoundedRect(r, 6, 6)
-        # pavadinimas + dydis
-        p.setFont(self.fonts.tiny)
-        size = f"{self.width()}×{self.height()}  ·  {self._scale() * 100:.0f}%"
-        label = f"{self.TITLE}   {size}"
-        tw = min(self.fonts.m_tiny.horizontalAdvance(label) + 16, self.width() - 8)
-        chip = QRectF(4, 4, tw, 18)
+        chip, gear, label = self._edit_rects()
+        p.setFont(self._edit_font())
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(QColor(226, 177, 60, 235))
-        p.drawRoundedRect(chip, 4, 4)
-        p.setPen(QColor(0, 0, 0))
-        p.drawText(chip.adjusted(8, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter, label)
+        p.setBrush(QColor(236, 190, 88, 240))
+        p.drawRoundedRect(chip, 5, 5)
+        p.setPen(QColor(20, 16, 6))
+        p.drawText(chip.adjusted(9, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter,
+                   self._edit_m.elidedText(label, Qt.TextElideMode.ElideRight, chip.width() - 12))
+        # Settings mygtukas: aiškiai matoma vieta nustatymams atidaryti
+        hover = getattr(self, "_hover_gear", False)
+        p.setPen(QPen(gold, 1))
+        p.setBrush(QColor(236, 190, 88) if hover else QColor(14, 14, 18, 235))
+        p.drawRoundedRect(gear, 5, 5)
+        col = QColor(20, 16, 6) if hover else gold
+        self._draw_gear(p, QPointF(gear.x() + 13, gear.center().y()), 5.2, col)
+        if gear.width() > 30:
+            p.setPen(col)
+            p.drawText(gear.adjusted(24, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter, "Settings")
         # rankenėlės: kampai (mastelis) ir kraštų vidurys (plotis / aukštis)
         w, h = self.width(), self.height()
         p.setPen(QPen(QColor(0, 0, 0, 160), 1))
@@ -325,9 +461,25 @@ class OverlayWidget(QWidget):
         for x, y in ((w / 2, 0), (w / 2, h), (0, h / 2), (w, h / 2)):
             p.drawRoundedRect(QRectF(min(max(x - 4, 1), w - 9), min(max(y - 4, 1), h - 9), 8, 8), 2, 2)
 
+    @staticmethod
+    def _draw_gear(p: QPainter, c: QPointF, rad: float, col: QColor):
+        import math
+        p.save()
+        p.setPen(QPen(col, 2.2, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+        for i in range(8):
+            a = i * math.pi / 4
+            p.drawLine(QPointF(c.x() + math.cos(a) * rad * 0.75, c.y() + math.sin(a) * rad * 0.75),
+                       QPointF(c.x() + math.cos(a) * rad * 1.25, c.y() + math.sin(a) * rad * 1.25))
+        p.setPen(QPen(col, 1.8))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(c, rad * 0.78, rad * 0.78)
+        p.restore()
+
     # ---------------- redagavimas pele ----------------
     def _zone(self, pos) -> str:
         x, y, w, h = pos.x(), pos.y(), self.width(), self.height()
+        if self._edit_rects()[1].contains(QPointF(pos)):
+            return "gear"
         left, right = x <= EDGE, x >= w - EDGE
         top, bottom = y <= EDGE, y >= h - EDGE
         near_l, near_r = x <= CORNER, x >= w - CORNER
@@ -359,10 +511,20 @@ class OverlayWidget(QWidget):
         if e.button() != Qt.MouseButton.LeftButton:
             return
         zone = self._zone(e.position().toPoint())
+        if zone == "gear":
+            self.ctx.open_settings(self.NAME)
+            return
         self._drag = (zone, e.globalPosition().toPoint(), self.geometry(), self._scale())
+
+    def leaveEvent(self, e):
+        if getattr(self, "_hover_gear", False):
+            self._hover_gear = False
+            self.update()
 
     def mouseDoubleClickEvent(self, e):
         """Dvigubas spustelėjimas redaguojant: aukštis vėl pagal turinį."""
+        if self.editing and self._zone(e.position().toPoint()) == "gear":
+            return
         if self.editing and self.HEIGHT_MODE != "auto":
             self.cfg["height"] = None
             self._drag = None
@@ -373,7 +535,11 @@ class OverlayWidget(QWidget):
         if not self.editing:
             return
         if self._drag is None:
-            self.setCursor(_CURSORS[self._zone(e.position().toPoint())])
+            zone = self._zone(e.position().toPoint())
+            self.setCursor(_CURSORS[zone])
+            if (zone == "gear") != getattr(self, "_hover_gear", False):
+                self._hover_gear = zone == "gear"
+                self.update()
             return
         zone, start, geo, scale0 = self._drag
         d = e.globalPosition().toPoint() - start
@@ -440,7 +606,7 @@ class OverlayWidget(QWidget):
     def apply_settings_keep_pos(self):
         pos = self.pos()
         c = self.cfg
-        c["x"], c["y"] = pos.x(), pos.y()
+        c["x"], c["y"], c["pos_v"] = pos.x(), pos.y(), 2
         self.apply_settings()
 
     def wheelEvent(self, e):
@@ -455,10 +621,9 @@ class OverlayWidget(QWidget):
         if not self.ctx.config.data.get("snap", True):
             return x, y
         xs, ys = [], []
-        scr = QGuiApplication.screenAt(QPoint(x + w // 2, y + h // 2)) or QGuiApplication.primaryScreen()
-        sg: QRect = scr.availableGeometry()
-        xs += [sg.left(), sg.right() + 1]
-        ys += [sg.top(), sg.bottom() + 1]
+        for _, sg in self.ctx.screens():  # visų monitorių kraštai
+            xs += [sg.left(), sg.right() + 1]
+            ys += [sg.top(), sg.bottom() + 1]
         for other in self.ctx.widgets.values():
             if other is self or not other.isVisible():
                 continue

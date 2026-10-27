@@ -1,7 +1,7 @@
 """Nustatymai ir profiliai (JSON vartotojo aplanke).
 
 Profiliai: atskiras išdėstymas lenktynėms, kvalifikacijai ir praktikai.
-Persijungia automatiškai pagal sesijos tipą. Temą galima priskirti lygai
+Persijungia automatiškai pagal sesijos tipą. Temą galima priskirti iRacing lygos sesijai
 ar serijai (iRacing lygos / serijos ID).
 """
 from __future__ import annotations
@@ -17,24 +17,25 @@ APP_DIR_NAME = "LTH Overlays"
 from .registry import (DEFAULT_WIDGETS, ENGINEER_TYPES, RELATIVE_COLUMNS,  # noqa: E402,F401
                        STANDINGS_COLUMNS, WEATHER_FIELDS)
 
-CONFIG_VERSION = 5
+CONFIG_VERSION = 6
 
 DEFAULT_CONFIG = {
     "version": CONFIG_VERSION,
     "autostart": True,  # paleisti su Windows; laukia, kol įsijungs iRacing
     "autostart_done": False,
-    "theme": "racelab",
+    "theme": "lth",
+    "theme_font": True,  # pasirinkus temą pritaikyti ir jos šriftą
     "font": "montserrat",
     "hotkey": "Ctrl+Shift+E",
     "engine_hz": 20,
     "auto_profile": True,
     "profile": "race",
-    "lth_member_ids": [],  # iRacing ID sąrašas filtrui „tik LTH lyga“
     "series_themes": {},  # {"league:12345": "lth", "series:228": "minimal"}
     "custom_colors": {},  # vartotojo spalvų perrašymai temai: {"accent": "#e2b13c", ...}
     "class_colors": {},  # klasės spalvos perrašymas: {"GT3": "#ff5888"}
-    "hotkeys": {"edit": "Ctrl+Shift+E", "toggle_all": "Ctrl+Shift+H"},
-    "open_control_center": True,  # atidaryti Control Center paleidus ranka
+    "hotkeys": {"edit": "Ctrl+Shift+E", "toggle_all": "Ctrl+Shift+H", "rain_next": "Ctrl+Shift+R"},
+    "open_control_center": True,
+    "onboarding_done": False,  # pirmo paleidimo tutorialas  # atidaryti Control Center paleidus ranka
     "snap": True,  # prilipimas prie tinklelio ir kitų valdiklių
     "profiles": {
         "race": {"name": "Race", "widgets": copy.deepcopy(DEFAULT_WIDGETS)},
@@ -71,12 +72,13 @@ class Config:
         self.load()
 
     def load(self):
+        self.fresh = not os.path.exists(self.path)  # pirmas paleidimas (tutorialui)
         try:
             with open(self.path, encoding="utf-8") as f:
                 raw = json.load(f)
             ver = int(raw.get("version", 1))
             if ver < 2:  # 0.1.x išdėstymai slėpė kitus automobilius
-                raw = {k: v for k, v in raw.items() if k in ("theme", "font", "hotkey", "lth_member_ids", "series_themes")}
+                raw = {k: v for k, v in raw.items() if k in ("theme", "font", "hotkey", "series_themes")}
             if ver < 3:  # naujas numatytasis stilius (Montserrat + modernus); išdėstymas paliekamas
                 raw.pop("theme", None)
                 raw.pop("font", None)
@@ -89,6 +91,12 @@ class Config:
                                 wc["width"] = int(round(float(wc["width"]) / s))
                         except (TypeError, ValueError, AttributeError):
                             pass
+            # v6: pašalinti lygos narių filtrai (programa skirta visai LTH bendruomenei)
+            raw.pop("lth_member_ids", None)
+            for prof in (raw.get("profiles") or {}).values():
+                for wc in ((prof or {}).get("widgets") or {}).values():
+                    if isinstance(wc, dict):
+                        wc.pop("lth_only", None)
             # v5: nauji valdikliai ir laukai ateina iš numatytų reikšmių (_merge)
             raw["version"] = CONFIG_VERSION
             self.data = _merge(DEFAULT_CONFIG, raw)

@@ -21,11 +21,11 @@ T = {
     "border": "#24242D",
     "border2": "#30303B",
     "text": "#EDEDF1",
-    "muted": "#9A9AA8",
-    "faint": "#62626E",
-    "accent": "#E2B13C",
-    "accent_hover": "#EDC25C",
-    "accent_soft": "rgba(226,177,60,0.12)",
+    "muted": "#A3A3B1",
+    "faint": "#828290",  # ≥ 4.5:1 ant kortelių fono - skaitoma
+    "accent": "#ECBE58",  # LTH logotipo auksas
+    "accent_hover": "#FBD069",
+    "accent_soft": "rgba(236,190,88,0.12)",
     "accent_text": "#18140A",
     "good": "#3DD68C",
     "bad": "#F2555A",

@@ -131,6 +131,9 @@ class Engineer:
             elif w.trend == "drying":
                 self._push("weather", f"Track drying: {w.wetness_text.lower()}", 1, t, cooldown=120)
             self._trend = w.trend
+        rc = getattr(snap, "rain_call", None)
+        if rc is not None and rc.key in ("wet_tyres", "try_dries"):
+            self._push("weather", rc.detail, 2, t, key="rain_" + rc.key, cooldown=300)
 
     def _time_rules(self, snap, t):
         if snap.session_type != "race":

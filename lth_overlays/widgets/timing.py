@@ -18,9 +18,27 @@ class DeltaBarWidget(PanelWidget):
     HEIGHT_MODE = "free"
     MIN_WIDTH = 160
     MIN_HEIGHT = 28
+    FAST_CAPABLE = True
     REF_LABEL = {"best": "BEST", "optimal": "OPTIMAL", "session_best": "SESSION BEST", "session_last": "LAST"}
+    REF_VAR = {"best": "LapDeltaToBestLap", "optimal": "LapDeltaToOptimalLap",
+               "session_best": "LapDeltaToSessionBestLap", "session_last": "LapDeltaToSessionLastlLap"}
+
+    def fast_tick(self, timing) -> bool:
+        f = timing.frame
+        ref = self.cfg.get("reference", "best")
+        name = self.REF_VAR.get(ref, "LapDeltaToBestLap")
+        v, ok = f.values.get(name), f.values.get(name + "_OK")
+        d = round(float(v), 2) if v is not None and ok else None
+        cur = float(f.get("LapCurrentLapTime", 0.0) or 0.0)
+        view = (d, ref, fmt_time(cur, 1) if self.cfg.get("show_lap_time", True) and cur > 0 else "")
+        if view == self._view:
+            return False
+        self._view = view
+        return True
 
     def content_key(self, snap):
+        if self.fast_active():
+            return ("fast", self.width(), self.height())
         p = snap.player
         ref = self.cfg.get("reference", "best")
         d = p.deltas.get(ref) if p is not None else None
@@ -44,7 +62,7 @@ class DeltaBarWidget(PanelWidget):
         pad = self.pad()
         bar_h = max(6.0, r.height() * 0.22)
         bar = QRectF(pad, r.height() - pad - bar_h, r.width() - 2 * pad, bar_h)
-        p.setBrush(pal.header)
+        p.setBrush(pal.track)
         p.drawRoundedRect(bar, bar_h / 2, bar_h / 2)
         mid = bar.center().x()
         if d is not None:
@@ -233,7 +251,7 @@ class BattleWidget(PanelWidget):
                     d = total
                     label = "LAP " + ("–" if d is None else f"{d:+.2f}")
                 if d is None:
-                    bg, fg = self.pal.header, self.pal.dim
+                    bg, fg = self.pal.track, self.pal.dim
                 else:  # mano laikas - jo laikas: < 0 = aš greitesnis
                     bg = QColor(self.pal.good if d < 0 else self.pal.bad)
                     bg.setAlpha(60 if abs(d) < 0.05 else 150)

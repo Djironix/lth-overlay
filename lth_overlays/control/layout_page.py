@@ -29,6 +29,7 @@ class LayoutCanvas(QWidget):
         self.ctx = page.ctx
         self.sel = None
         self.show_hidden = False
+        self.view_index = None  # None = visi monitoriai
         self._drag = None
         self._hover = None
         self.setMouseTracking(True)
@@ -37,7 +38,11 @@ class LayoutCanvas(QWidget):
 
     # ---- geometrija ----
     def screen(self) -> QRect:
-        return self.ctx.screen_rect()
+        """Rodoma sritis: visas darbalaukis arba pasirinktas monitorius."""
+        screens = self.ctx.screens()
+        if self.view_index is not None and 0 <= self.view_index < len(screens):
+            return screens[self.view_index][1]
+        return self.ctx.desktop_rect()
 
     def _xf(self):
         scr = self.screen()
@@ -128,16 +133,16 @@ class LayoutCanvas(QWidget):
         if zone == "move":
             x, y = self._snap(name, geo.x() + dx, geo.y() + dy, geo.width(), geo.height())
             w.move(int(x), int(y))
-            c["x"], c["y"] = int(x), int(y)
+            c["x"], c["y"], c["pos_v"] = int(x), int(y), 2
         elif zone in ("width", "resize"):
             nw = max(w.min_width(), round((geo.width() + dx) / GRID) * GRID)
-            c["x"], c["y"] = geo.x(), geo.y()
+            c["x"], c["y"], c["pos_v"] = geo.x(), geo.y(), 2
             c["width"] = int(round(nw / scale0))
             if zone == "resize":
                 self._set_height(w, geo.height() + dy, scale0)
             w.apply_settings()
         elif zone == "height":
-            c["x"], c["y"] = geo.x(), geo.y()
+            c["x"], c["y"], c["pos_v"] = geo.x(), geo.y(), 2
             self._set_height(w, geo.height() + dy, scale0)
             w.apply_settings()
         self.geometry_edited.emit(name)
@@ -177,7 +182,7 @@ class LayoutCanvas(QWidget):
              Qt.Key.Key_Down: (0, step)}.get(e.key())
         if d:
             w = self.ctx.widgets[self.sel]
-            w.cfg["x"], w.cfg["y"] = w.x() + d[0], w.y() + d[1]
+            w.cfg["x"], w.cfg["y"], w.cfg["pos_v"] = w.x() + d[0], w.y() + d[1], 2
             w.move(w.cfg["x"], w.cfg["y"])
             self._commit(self.sel)
             return
@@ -191,9 +196,11 @@ class LayoutCanvas(QWidget):
     def _snap(self, name, x, y, w, h):
         if not self.ctx.config.data.get("snap", True):
             return round(x), round(y)
-        scr = self.screen()
-        xs = [scr.left(), scr.right() + 1, scr.center().x()]
-        ys = [scr.top(), scr.bottom() + 1]
+        xs, ys, centers = [], [], set()
+        for _, sr in self.ctx.screens():
+            xs += [sr.left(), sr.right() + 1, sr.center().x()]
+            ys += [sr.top(), sr.bottom() + 1]
+            centers.add(sr.center().x())
         for n, r, on in self.items():
             if n == name or not on:
                 continue
@@ -205,7 +212,7 @@ class LayoutCanvas(QWidget):
             best, bd = None, SNAP + 1
             for edge in edges:
                 for cand in (edge, edge - size, edge - size / 2):
-                    if cand == edge - size / 2 and edge not in (scr.center().x(),):
+                    if cand == edge - size / 2 and edge not in centers:
                         continue
                     dist = abs(v - cand)
                     if dist < bd:
@@ -224,30 +231,41 @@ class LayoutCanvas(QWidget):
         p.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
         k, ox, oy, scr = self._xf()
         view = QRectF(ox, oy, scr.width() * k, scr.height() * k)
-        g = QLinearGradient(0, view.top(), 0, view.bottom())
-        g.setColorAt(0.0, QColor(74, 92, 116))
-        g.setColorAt(0.55, QColor(52, 58, 66))
-        g.setColorAt(0.56, QColor(36, 38, 42))
-        g.setColorAt(1.0, QColor(22, 22, 25))
-        p.setPen(QPen(qcolor("border2"), 1))
-        p.setBrush(g)
-        p.drawRoundedRect(view.adjusted(-1, -1, 1, 1), 8, 8)
-        # tinklelis
-        p.setPen(QPen(QColor(255, 255, 255, 14), 1))
-        step = 80 * k
-        x = view.left() + step
-        while x < view.right():
-            p.drawLine(QPointF(x, view.top()), QPointF(x, view.bottom()))
-            x += step
-        y = view.top() + step
-        while y < view.bottom():
-            p.drawLine(QPointF(view.left(), y), QPointF(view.right(), y))
-            y += step
-        p.setPen(QPen(QColor(255, 255, 255, 30), 1, Qt.PenStyle.DashLine))
-        p.drawLine(QPointF(view.center().x(), view.top()), QPointF(view.center().x(), view.bottom()))
-        p.setPen(QColor(255, 255, 255, 50))
-        p.setFont(ui_font(12))
-        p.drawText(view, Qt.AlignmentFlag.AlignCenter, f"{scr.width()} × {scr.height()}")
+        if self.view_index is not None:
+            p.setClipRect(view.adjusted(-2, -24, 2, 2))
+        screens = self.ctx.screens()
+        for i, (sname, sr) in enumerate(screens):
+            sv = self.to_view(sr)
+            g = QLinearGradient(0, sv.top(), 0, sv.bottom())
+            g.setColorAt(0.0, QColor(74, 92, 116))
+            g.setColorAt(0.55, QColor(52, 58, 66))
+            g.setColorAt(0.56, QColor(36, 38, 42))
+            g.setColorAt(1.0, QColor(22, 22, 25))
+            p.setPen(QPen(qcolor("border2"), 1.5))
+            p.setBrush(g)
+            p.drawRoundedRect(sv.adjusted(1, 1, -1, -1), 6, 6)
+            p.save()
+            p.setClipRect(sv)
+            p.setPen(QPen(QColor(255, 255, 255, 14), 1))
+            step = 80 * k
+            x = sv.left() + step
+            while x < sv.right():
+                p.drawLine(QPointF(x, sv.top()), QPointF(x, sv.bottom()))
+                x += step
+            y = sv.top() + step
+            while y < sv.bottom():
+                p.drawLine(QPointF(sv.left(), y), QPointF(sv.right(), y))
+                y += step
+            p.setPen(QPen(QColor(255, 255, 255, 30), 1, Qt.PenStyle.DashLine))
+            p.drawLine(QPointF(sv.center().x(), sv.top()), QPointF(sv.center().x(), sv.bottom()))
+            p.restore()
+            p.setPen(QColor(255, 255, 255, 70))
+            p.setFont(ui_font(12, QFont.Weight.DemiBold))
+            label_txt = f"Display {i + 1}{'  (main)' if i == 0 and len(screens) > 1 else ''}"
+            p.drawText(sv.adjusted(0, 0, 0, -18), Qt.AlignmentFlag.AlignCenter, label_txt)
+            p.setFont(ui_font(11))
+            p.setPen(QColor(255, 255, 255, 50))
+            p.drawText(sv.adjusted(0, 18, 0, 0), Qt.AlignmentFlag.AlignCenter, f"{sr.width()} × {sr.height()}")
         # valdikliai
         prev = self.page.center.preview
         for name, r, on in self.items():
@@ -318,6 +336,9 @@ class LayoutPage(QWidget):
         self.b_edit = button("Edit on screen", "primary", "move", "Show the real widgets with handles in iRacing")
         self.b_edit.clicked.connect(lambda: self.ctx.toggle_edit())
         bar.addWidget(self.b_edit)
+        self.b_presets = button("Presets", None, "layout", "Ready layouts: Simple, Single monitor, Triple monitor")
+        self.b_presets.clicked.connect(self._presets)
+        bar.addWidget(self.b_presets)
         self.t_snap = Toggle(bool(self.ctx.config.data.get("snap", True)))
         self.t_snap.toggled.connect(self._snap)
         bar.addSpacing(8)
@@ -329,12 +350,16 @@ class LayoutPage(QWidget):
         bar.addWidget(self.t_hidden)
         bar.addWidget(label("Show hidden widgets", "muted"))
         bar.addStretch(1)
-        bar.addWidget(label("Arrows nudge 1 px · Shift 10 px · Delete hides", "faint"))
+        self.view_box = QHBoxLayout()
+        self.view_box.setSpacing(6)
+        bar.addLayout(self.view_box)
         left.addLayout(bar)
         self.canvas = LayoutCanvas(self)
         self.canvas.selected.connect(self._select)
         self.canvas.geometry_edited.connect(self._geo_edited)
         left.addWidget(self.canvas, 1)
+        left.addWidget(label("Drag to move · corner and edges resize · double-click opens settings · "
+                             "arrow keys nudge 1 px (Shift 10 px) · Delete hides", "faint"))
         root.addLayout(left, 1)
         # inspektorius
         side = QWidget()
@@ -364,7 +389,27 @@ class LayoutPage(QWidget):
         self._timer.timeout.connect(self._refresh_thumbs)
 
     # ---- API centrui ----
+    def _fill_views(self):
+        from .components import Segmented, clear_layout as _clear
+        _clear(self.view_box)
+        screens = self.ctx.screens()
+        if len(screens) < 2:
+            self.canvas.view_index = None
+            return
+        opts = {"all": "All screens"}
+        opts.update({str(i): f"Display {i + 1}" for i in range(len(screens))})
+        cur = "all" if self.canvas.view_index is None else str(self.canvas.view_index)
+        seg = Segmented(opts, cur if cur in opts else "all")
+        seg.changed.connect(self._set_view)
+        self.view_box.addWidget(label("View", "muted"))
+        self.view_box.addWidget(seg)
+
+    def _set_view(self, v):
+        self.canvas.view_index = None if v == "all" else int(v)
+        self.canvas.update()
+
     def on_show(self, select=None):
+        self._fill_views()
         self.t_snap.set_silent(bool(self.ctx.config.data.get("snap", True)))
         self.editing_changed(self.ctx.editing)
         self.center.ensure_sizes()
@@ -391,6 +436,14 @@ class LayoutPage(QWidget):
         self.canvas.update()
         if name == self.canvas.sel:
             self._update_fields()
+
+    def _presets(self):
+        from .dialogs import PresetDialog
+        if PresetDialog(self.center).exec():
+            self.center.ensure_sizes()
+            self.thumbs.clear()
+            self.refresh_list()
+            self._refresh_thumbs()
 
     # ---- vidus ----
     def _snap(self, v):
@@ -494,7 +547,7 @@ class LayoutPage(QWidget):
         w = self.ctx.widgets[name]
         c = w.cfg
         s = float(c.get("scale", 1.0) or 1.0)
-        c["x"], c["y"] = w.x(), w.y()
+        c["x"], c["y"], c["pos_v"] = w.x(), w.y(), 2
         if what == "x":
             c["x"] = int(v)
         elif what == "y":
@@ -512,9 +565,7 @@ class LayoutPage(QWidget):
 
     def _center(self, name):
         w = self.ctx.widgets[name]
-        w.cfg["x"] = -1
-        w.apply_settings()
-        w.cfg["x"] = w.x()
+        w.center_on_screen()
         self.canvas._commit(name)
         self._update_fields()
 

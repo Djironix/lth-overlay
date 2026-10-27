@@ -114,7 +114,7 @@ class OverviewPage(Page):
                 ("Pick your widgets", "Widgets page: switch on what you want to see."),
                 ("Place them", f"Press {hk.get('edit', 'Ctrl+Shift+E')} in iRacing, drag widgets, drag edges "
                                "and corners to resize. Or use the Layout editor here."),
-                ("Fine-tune", "Right-click a widget in edit mode to open its settings."),
+                ("Fine-tune", "In edit mode every widget has a Settings button. Click it to open its settings."),
                 ("Hide everything", f"{hk.get('toggle_all', 'Ctrl+Shift+H')} hides all overlays, e.g. for a "
                                     "screenshot.")), 1):
             r = QHBoxLayout()
@@ -449,7 +449,7 @@ class WidgetDetailPage(Page):
         hint = Card("Tips")
         tips = ["Drag the widget on screen in edit mode. Corners scale it, edges change width or height.",
                 "Ctrl + mouse wheel over a widget changes its size.",
-                "Right-click a widget in edit mode to jump back here."]
+                "In edit mode, the Settings button on the widget (or a right-click) jumps back here."]
         if self.ctx.widgets[name].HEIGHT_MODE == "rows":
             tips.insert(1, "Drag the bottom edge to show more or fewer rows. Double-click to go back to automatic.")
         for t in tips:
@@ -525,7 +525,7 @@ class ProfilesPage(Page):
         self.content.addWidget(c)
         b_new = button("New profile", "primary", "plus")
         b_new.clicked.connect(self._new)
-        b_imp = button("Import", None, "upload")
+        b_imp = button("Import layout", None, "upload", "Paste a share code or open a .lthlayout file")
         b_imp.clicked.connect(self._import)
         self.list_card = Card("Your profiles", None, None)
         self.list_card.body.insertLayout(0, hbox(None, b_imp, b_new))
@@ -536,8 +536,9 @@ class ProfilesPage(Page):
         # temos lygoms / serijoms
         b_add = button("Add rule", None, "plus")
         b_add.clicked.connect(self._add_rule)
-        self.rules_card = Card("Theme per league or series",
-                               "Use a different look automatically, e.g. the LTH theme in LTH league races.", b_add)
+        self.rules_card = Card("Theme per series",
+                               "Use a different look automatically for an iRacing series or a private league session.",
+                               b_add)
         self.rules = QVBoxLayout()
         self.rules.setSpacing(8)
         self.rules_card.add(self.rules)
@@ -577,8 +578,10 @@ class ProfilesPage(Page):
                 b = button("Activate", None)
                 b.clicked.connect(lambda _=False, k=key: self._activate(k))
                 lay.addWidget(b)
-            for ic, tip, fn in (("edit", "Rename", self._rename), ("copy", "Duplicate", self._dup),
-                                ("download", "Export to file", self._export)):
+            sh = button("Share", None, "upload", "Share code for Discord or a .lthlayout file")
+            sh.clicked.connect(lambda _=False, k=key: self._export(k))
+            lay.addWidget(sh)
+            for ic, tip, fn in (("edit", "Rename", self._rename), ("copy", "Duplicate", self._dup)):
                 b = button("", "ghost", ic, tip)
                 b.setFixedWidth(36)
                 b.clicked.connect(lambda _=False, k=key, f=fn: f(k))
@@ -626,26 +629,13 @@ class ProfilesPage(Page):
         self._fill()
 
     def _export(self, key):
-        path, _ = QFileDialog.getSaveFileName(self, "Export profile", f"{key}.lthprofile.json", "JSON (*.json)")
-        if path:
-            try:
-                self.ctx.config.export_profile(key, path)
-            except OSError as e:
-                QMessageBox.warning(self, "Export failed", str(e))
+        from .dialogs import ShareDialog
+        ShareDialog(self.center, key).exec()
 
     def _import(self):
-        path, _ = QFileDialog.getOpenFileName(self, "Import profile", "", "JSON (*.json)")
-        if not path:
-            return
-        try:
-            base = os.path.basename(path).split(".")[0]
-            key = self._unique_key(base)
-            self.ctx.config.import_profile(key, path)
-            self.ctx.config.data["profiles"][key].setdefault("name", base)
-            self.ctx.save_config()
-            self._fill()
-        except (OSError, ValueError) as e:
-            QMessageBox.warning(self, "Import failed", str(e))
+        from .dialogs import ImportDialog
+        ImportDialog(self.center).exec()
+        self._fill()
 
     def _delete(self, key):
         name = self.ctx.config.data["profiles"][key].get("name", key)
@@ -671,7 +661,7 @@ class ProfilesPage(Page):
             kind, _, ident = rule.partition(":")
             row = QHBoxLayout()
             row.setSpacing(10)
-            row.addWidget(label("League" if kind == "league" else "Series", "muted"))
+            row.addWidget(label("League session" if kind == "league" else "Series", "muted"))
             row.addWidget(label(f"ID {ident}", "h3"))
             row.addStretch(1)
             row.addWidget(label("uses", "faint"))
@@ -685,14 +675,15 @@ class ProfilesPage(Page):
             self.rules.addLayout(row)
 
     def _add_rule(self):
-        kinds = ["League", "Series"]
+        kinds = ["Series", "League session"]
         kind, ok = QInputDialog.getItem(self, "Theme rule", "Apply to:", kinds, 0, False)
         if not ok:
             return
-        ident, ok = QInputDialog.getInt(self, "Theme rule", f"iRacing {kind.lower()} ID:", 0, 1, 99999999)
+        ident, ok = QInputDialog.getInt(self, "Theme rule", "iRacing series ID:" if kind == "Series" else "iRacing league ID:", 0, 1, 99999999)
         if not ok:
             return
-        self.ctx.config.data.setdefault("series_themes", {})[f"{kind.lower()}:{ident}"] = "lth"
+        key = "league" if kind.startswith("League") else "series"
+        self.ctx.config.data.setdefault("series_themes", {})[f"{key}:{ident}"] = self.ctx.config.data.get("theme", "lth")
         self.ctx.save_config()
         self._fill_rules()
 
@@ -714,8 +705,8 @@ class ThemeCard(QWidget):
         super().__init__()
         self.key = key
         self.selected = selected
-        self.setFixedHeight(150)
-        self.setMinimumWidth(200)
+        self.setFixedHeight(166)
+        self.setMinimumWidth(180)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def mouseReleaseEvent(self, e):
@@ -751,9 +742,25 @@ class ThemeCard(QWidget):
         p.setBrush(bg)
         p.drawRoundedRect(box, rad, rad)
         hh = 14
-        p.setBrush(QColor(*t["header"]))
+        style = t.get("header_style", "marker" if t.get("lumina") else "line")
+        hc = QColor(*t["header"])
+        if t.get("header_alpha") is not None:
+            hc.setAlpha(int(255 * t["header_alpha"]))
+        p.setBrush(hc)
         p.drawRoundedRect(QRectF(box.x(), box.y(), box.width(), hh), rad, rad)
-        p.fillRect(QRectF(box.x(), box.y() + hh - 2, box.width(), 2), QColor(*t["accent"]))
+        acc = QColor(*t["accent"])
+        if style == "line":
+            p.fillRect(QRectF(box.x(), box.y() + hh - 2, box.width(), 2), acc)
+        elif style == "gold":
+            gg = QLinearGradient(box.x(), 0, box.right(), 0)
+            gg.setColorAt(0, QColor(251, 208, 105))
+            gg.setColorAt(1, QColor(209, 160, 58))
+            p.fillRect(QRectF(box.x(), box.y() + hh - 2, box.width(), 2), gg)
+            p.fillRect(QRectF(box.x(), box.y() + 3, 2, hh - 6), gg)
+        elif style == "marker":
+            p.fillRect(QRectF(box.x(), box.y() + 3, 2, hh - 6), acc)
+        p.setBrush(QColor(*t["text"]) if style != "line" and style != "gold" else acc)
+        p.drawRoundedRect(QRectF(box.x() + 7, box.y() + hh * 0.38, box.width() * 0.22, hh * 0.24), 1, 1)
         rows = 4
         rh = (box.height() - hh - 4) / rows
         for i in range(rows):
@@ -770,8 +777,14 @@ class ThemeCard(QWidget):
             p.drawRoundedRect(QRectF(box.right() - 34, y + rh * 0.38, 26, rh * 0.24), 1, 1)
         p.setPen(qcolor("text"))
         p.setFont(ui_font(13, QFont.Weight.DemiBold))
-        p.drawText(QRectF(r.x() + 14, stage.bottom() + 8, r.width() - 40, 26), Qt.AlignmentFlag.AlignVCenter,
+        p.drawText(QRectF(r.x() + 14, stage.bottom() + 6, r.width() - 40, 22), Qt.AlignmentFlag.AlignVCenter,
                    t["name"])
+        fk = t.get("font")
+        if fk in FONT_CHOICES:
+            p.setPen(qcolor("faint"))
+            p.setFont(ui_font(11.5))
+            p.drawText(QRectF(r.x() + 14, stage.bottom() + 26, r.width() - 40, 18), Qt.AlignmentFlag.AlignVCenter,
+                       FONT_CHOICES[fk][0])
         if self.selected:
             p.drawPixmap(int(r.right() - 30), int(stage.bottom() + 13), icon_pixmap("check", T["accent"], 16))
 
@@ -784,7 +797,7 @@ class FontRow(QWidget):
         self.key = key
         self.selected = selected
         self.fonts = Fonts(1.25, key)
-        self.setFixedHeight(54)
+        self.setFixedHeight(48)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
     def mouseReleaseEvent(self, e):
@@ -810,7 +823,7 @@ class FontRow(QWidget):
         p.setPen(qcolor("text"))
         p.setFont(self.fonts.base)
         p.drawText(QRectF(260, 0, r.width() - 300, r.height()), Qt.AlignmentFlag.AlignVCenter,
-                   "P3   #7   J. SMITH   1:32.418   +4.2")
+                   "P3   #7   P. ŽEMAITIS   1:32.418   +4.2")
         if self.selected:
             p.drawPixmap(int(r.right() - 30), int(r.center().y() - 8), icon_pixmap("check", T["accent"], 16))
 
@@ -828,7 +841,12 @@ class AppearancePage(Page):
 
     def __init__(self, center):
         super().__init__(center)
-        self.theme_card = Card("Theme", "The base look of every widget.")
+        self.t_theme_font = Toggle(bool(self.ctx.config.data.get("theme_font", True)))
+        self.t_theme_font.toggled.connect(lambda v: (self.ctx.config.data.__setitem__("theme_font", bool(v)),
+                                                     self.ctx.save_config_soon()))
+        tf = QWidget()
+        tf.setLayout(hbox(label("Use the theme's font", "muted"), self.t_theme_font))
+        self.theme_card = Card("Theme", "The base look of every widget: colours, corners, header and font.", tf)
         self.theme_grid = QGridLayout()
         self.theme_grid.setSpacing(12)
         self.theme_card.add(self.theme_grid)
@@ -864,14 +882,18 @@ class AppearancePage(Page):
 
     def _fill_themes(self):
         clear_layout(self.theme_grid)
-        cur = self.ctx.config.data.get("theme", "racelab")
+        cur = self.ctx.config.data.get("theme", "lth")
         for i, key in enumerate(THEMES):
             c = ThemeCard(key, key == cur)
             c.clicked.connect(self._set_theme)
-            self.theme_grid.addWidget(c, 0, i)
+            self.theme_grid.addWidget(c, i // 5, i % 5)
 
     def _set_theme(self, key):
         self.ctx.config.data["theme"] = key
+        fk = THEMES[key].get("font")
+        if self.ctx.config.data.get("theme_font", True) and fk:
+            self.ctx.config.data["font"] = fk
+            self._fill_fonts()
         self.ctx.all_widgets_changed()
         self.center.preview.invalidate()
         self._fill_themes()
@@ -880,10 +902,18 @@ class AppearancePage(Page):
     def _fill_fonts(self):
         clear_layout(self.font_rows)
         cur = self.ctx.config.data.get("font", "montserrat")
-        for key in FONT_CHOICES:
-            r = FontRow(key, key == cur)
-            r.clicked.connect(self._set_font)
-            self.font_rows.addWidget(r)
+        from ..theme import FONT_GROUPS
+        for group in FONT_GROUPS:
+            keys = [k for k, v in FONT_CHOICES.items() if v[2] == group]
+            if not keys:
+                continue
+            e = label(group.upper(), "eyebrow")
+            e.setContentsMargins(2, 8, 0, 0)
+            self.font_rows.addWidget(e)
+            for key in keys:
+                r = FontRow(key, key == cur)
+                r.clicked.connect(self._set_font)
+                self.font_rows.addWidget(r)
 
     def _set_font(self, key):
         self.ctx.config.data["font"] = key
@@ -983,7 +1013,9 @@ class HotkeysPage(Page):
     TITLE = "Hotkeys"
     SUBTITLE = "Work from inside iRacing without alt-tabbing"
     ACTIONS = (("edit", "Edit layout", "Turn edit mode on or off: drag, resize and right-click widgets."),
-               ("toggle_all", "Hide all overlays", "Hide or show every widget at once."))
+               ("toggle_all", "Hide all overlays", "Hide or show every widget at once."),
+               ("rain_next", "Rain Master: next tip", "Show the next rain tip for the current conditions. "
+                                                      "Put it on a button box key."))
 
     def __init__(self, center):
         super().__init__(center)
@@ -1014,7 +1046,7 @@ class HotkeysPage(Page):
                      ("Drag top / bottom edge", "Change the height: more or fewer rows in tables."),
                      ("Double-click", "Height back to automatic."),
                      ("Ctrl + wheel", "Scale in 5% steps."),
-                     ("Right-click", "Open the widget's settings here.")):
+                     ("Settings button / right-click", "Open the widget's settings here.")):
             m.add(hbox(label(a, "h3"), None, label(b, "muted")))
         self.content.addWidget(m)
         self.content.addStretch(1)
@@ -1051,7 +1083,7 @@ class HotkeysPage(Page):
 # ====================================================================== General
 class GeneralPage(Page):
     TITLE = "General"
-    SUBTITLE = "Startup, timing engine, league and track maps"
+    SUBTITLE = "Startup, timing engine and track maps"
 
     def __init__(self, center):
         super().__init__(center)
@@ -1075,18 +1107,6 @@ class GeneralPage(Page):
         t_snap.toggled.connect(lambda v: self._set("snap", bool(v)))
         e.add(SettingRow("Snap widgets while dragging", t_snap, "To screen edges, other widgets and an 8 px grid."))
         self.content.addWidget(e)
-
-        lg = Card("LTH league", "iRacing customer IDs of league drivers, for the “LTH drivers only” Standings filter.")
-        self.ids = QPlainTextEdit()
-        self.ids.setPlaceholderText("123456, 234567, 345678 …")
-        self.ids.setPlainText(", ".join(str(x) for x in d.get("lth_member_ids", [])))
-        self.ids.setFixedHeight(90)
-        save = button("Save IDs", None, "check")
-        save.clicked.connect(self._save_ids)
-        self.ids_state = label("", "faint")
-        lg.add(self.ids)
-        lg.add(hbox(self.ids_state, None, save))
-        self.content.addWidget(lg)
 
         tm = Card("Track maps", "Recorded from your first clean lap on each track and saved for next time.")
         b1 = button("Re-record current track", None, "record")
@@ -1120,15 +1140,6 @@ class GeneralPage(Page):
             if sys.platform == "win32":
                 QMessageBox.warning(self, "Start with Windows", "Could not change the Windows startup setting.")
 
-    def _save_ids(self):
-        ids = sorted({int(x) for x in re.findall(r"\d+", self.ids.toPlainText())})
-        self.ctx.config.data["lth_member_ids"] = ids
-        self.ctx.save_config()
-        self.ids.setPlainText(", ".join(str(x) for x in ids))
-        self.ids_state.setText(f"{len(ids)} drivers saved")
-        for name in ("standings",):
-            self.ctx.widget_changed(name)
-
     def _forget_map(self):
         self.ctx.engine.forget_map = True
         self.map_state.setText("Drive a clean lap to record it again.")
@@ -1139,7 +1150,7 @@ class GeneralPage(Page):
             return
         import copy
         from ..config import DEFAULT_CONFIG
-        keep = {k: self.ctx.config.data.get(k) for k in ("autostart", "autostart_done", "lth_member_ids")}
+        keep = {k: self.ctx.config.data.get(k) for k in ("autostart", "autostart_done")}
         self.ctx.config.data = copy.deepcopy(DEFAULT_CONFIG)
         self.ctx.config.data.update(keep)
         self.ctx.all_widgets_changed()
@@ -1179,7 +1190,8 @@ class PerformancePage(Page):
                   "Each widget has its own refresh rate: Relative 10× per second, Standings 2×, Weather once.",
                   "Text layouts are cached, so a redraw is mostly copying pixels.",
                   "The timing engine runs at below-normal priority and sleeps while iRacing is not running.",
-                  "Inputs is the only widget that reads every telemetry frame (60 Hz). It costs a little more."):
+                  "Inputs (and Dash or Delta bar with Smooth on) draw straight from telemetry at up to 60 fps. "
+                  "They cost a little more: turn Smooth off or use 30 fps on slower PCs."):
             tips.add(label("•  " + t, "muted", wrap=True))
         self.content.addWidget(tips)
         self.content.addStretch(1)
@@ -1279,19 +1291,23 @@ class AboutPage(Page):
         top = QHBoxLayout()
         top.setSpacing(16)
         logo = QLabel()
-        from ..app import make_icon
-        logo.setPixmap(make_icon().pixmap(56, 56))
+        from ..brand import logo_pixmap
+        logo.setPixmap(logo_pixmap(48))
         top.addWidget(logo)
+        top.addSpacing(8)
         top.addLayout(vbox(label("LTH Overlays", "h1"), label(f"Version {VERSION}", "muted"), spacing=2), 1)
         c.add(top)
-        c.add(label("In-house iRacing overlays for the LTH community and league. Accurate gaps that do not jump, "
+        c.add(label("In-house iRacing overlays for the LTH community. Accurate gaps that do not jump, "
                     "multiclass done right, and nothing you do not need running in the background.", "muted",
                     wrap=True))
+        tut = button("Show tutorial", None, "play")
+        tut.clicked.connect(center.show_onboarding)
+        c.add(hbox(tut, None))
         self.content.addWidget(c)
         lic = Card("Built with")
         for a, b in (("Python 3.13", "PSF License"), ("Qt 6 / PySide6", "LGPL v3"), ("NumPy", "BSD"),
-                     ("PyYAML", "MIT"), ("Inter, Montserrat, Saira Condensed, Barlow Condensed, Rajdhani, Chakra Petch",
-                                         "SIL Open Font License")):
+                     ("PyYAML", "MIT"), ("Inter and all bundled overlay fonts (Montserrat, Saira, Barlow, Oswald, Exo 2, "
+                                         "Titillium, Kanit, Teko and more)", "SIL Open Font License")):
             lic.add(hbox(label(a), None, label(b, "faint")))
         self.content.addWidget(lic)
         self.content.addWidget(label("Not affiliated with iRacing.com Motorsport Simulations. iRacing data is read "

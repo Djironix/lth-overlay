@@ -33,6 +33,7 @@ from .registry import BY_NAME, CATEGORIES, WIDGETS
 
 HOTKEY_EDIT = 0x4C54  # "LT"
 HOTKEY_HIDE = 0x4C55
+HOTKEY_RAIN = 0x4C56
 
 # Valdiklio atnaujinimo dažnis: kas kiek UI „tikų“ (1 tikas = 0,1 s) - iš registro
 RATES = {w.name: w.rate for w in WIDGETS}
@@ -49,7 +50,8 @@ class EngineThread(threading.Thread):
         self.update_us = 0.0
         self.fps = None
         self.error = None
-        self.inputs_wanted = False  # UI įjungė Inputs valdiklį: reikia kiekvieno kadro (60 Hz)
+        self.inputs_wanted = False
+        self.timing = None  # UI įjungė Inputs valdiklį: reikia kiekvieno kadro (60 Hz)
         self.connected = False
         self.forget_map = False
 
@@ -84,6 +86,7 @@ class EngineThread(threading.Thread):
             return
         hz = float(self.config.data.get("engine_hz", 20))
         eng = TimingEngine(rate_hz=hz, maps_dir=os.path.join(app_dir(), "maps"))
+        self.timing = eng  # UI greitam keliui (Inputs / Dash 60 Hz)
         base_gap = max(0.0, 1.0 / hz - 0.006)
         engineer = Engineer()
         statelog = _StateLog()
@@ -245,10 +248,49 @@ class OverlayApp(QObject):
         self.engine = EngineThread(make_source, config)
 
     # ---- kontekstas valdikliams ----
+    def screens(self) -> list:
+        """Visi monitoriai: [(pavadinimas, QRect)] virtualaus darbalaukio koordinatėmis, pagrindinis - pirmas.
+
+        Testams / peržiūrai galima perduoti virtual_screen (QRect arba QRect sąrašą)."""
+        vs = self.virtual_screen
+        if vs is not None:
+            rects = vs if isinstance(vs, (list, tuple)) else [vs]
+            return [(f"Display {i + 1}", QRect(r)) for i, r in enumerate(rects)]
+        prim = QGuiApplication.primaryScreen()
+        out = [(prim.name(), prim.geometry())] if prim is not None else []
+        for s in QGuiApplication.screens():
+            if s is not prim:
+                out.append((s.name(), s.geometry()))
+        return out or [("Display 1", QRect(0, 0, 1920, 1080))]
+
     def screen_rect(self) -> QRect:
-        if self.virtual_screen is not None:
-            return self.virtual_screen
-        return QGuiApplication.primaryScreen().availableGeometry()
+        """Pagrindinis monitorius."""
+        return self.screens()[0][1]
+
+    def screen_for(self, x: int, y: int) -> QRect | None:
+        """Monitorius, kuriame yra taškas (arba None - pvz. atjungtas monitorius)."""
+        for _, r in self.screens():
+            if r.contains(int(x), int(y)):
+                return r
+        return None
+
+    def screen_for_rect(self, r: QRect) -> QRect | None:
+        """Monitorius, kuriame yra didžiausia lango dalis (None - nė viename)."""
+        best, area = None, 0
+        for _, sr in self.screens():
+            i = sr.intersected(r)
+            a = i.width() * i.height() if not i.isEmpty() else 0
+            if a > area:
+                best, area = sr, a
+        return best
+
+    def desktop_rect(self) -> QRect:
+        """Visų monitorių sąjunga."""
+        rects = [r for _, r in self.screens()]
+        u = QRect(rects[0])
+        for r in rects[1:]:
+            u = u.united(r)
+        return u
 
     def save_config(self):
         try:
@@ -324,11 +366,29 @@ class OverlayApp(QObject):
             self._first_run_autostart()
             QTimer.singleShot(5000, self._check_preview_flag)
         self._update_inputs_flag()
+        # monitorius prijungtas / atjungtas / pakeista rezoliucija - perstatom valdiklius
+        gapp = QGuiApplication.instance()
+        gapp.screenAdded.connect(lambda *_: QTimer.singleShot(800, self._screens_changed))
+        gapp.screenRemoved.connect(lambda *_: QTimer.singleShot(800, self._screens_changed))
         self._filter = HotkeyFilter({HOTKEY_EDIT: self.toggle_edit, HOTKEY_HIDE: self.toggle_hide_all,
+                                     HOTKEY_RAIN: self.next_rain_tip,
                                      win32.SHOW_REQUEST: self._show_request})
         self.app.installNativeEventFilter(self._filter)
         self.register_hotkeys()
         self.app.aboutToQuit.connect(self._shutdown)
+
+    def next_rain_tip(self):
+        w = self.widgets.get("rain_master")
+        if w is not None:
+            w.next_tip()
+
+    def _screens_changed(self):
+        for w in self.widgets.values():
+            w.apply_settings()
+        if self.control is not None:
+            lp = self.control._pages.get("layout")
+            if lp is not None:
+                lp.canvas.update()
 
     def _show_request(self):
         """Kitas paleidimas paprašė atidaryti Control Center (žinutė ateina kiekvienam langui - vieną kartą)."""
@@ -339,25 +399,35 @@ class OverlayApp(QObject):
 
     def register_hotkeys(self) -> dict:
         """(Per)registruoja karštuosius klavišus iš nustatymų. Grąžina {veiksmas: ar pavyko}."""
-        for hid in (HOTKEY_EDIT, HOTKEY_HIDE):
+        for hid in (HOTKEY_EDIT, HOTKEY_HIDE, HOTKEY_RAIN):
             win32.unregister_hotkey(hid)
         hk = self.config.data.get("hotkeys") or {}
         out = {}
-        for action, hid in (("edit", HOTKEY_EDIT), ("toggle_all", HOTKEY_HIDE)):
+        for action, hid in (("edit", HOTKEY_EDIT), ("toggle_all", HOTKEY_HIDE), ("rain_next", HOTKEY_RAIN)):
             parsed = win32.parse_hotkey(hk.get(action, ""))
             out[action] = bool(parsed) and win32.register_hotkey(hid, *parsed)
         self._hotkeys = out
         return out
 
+    def quit(self):
+        """Tikras išėjimas (tray / Control Center). Control Center tada nebesislepia į tray."""
+        self.quitting = True
+        if self.control is not None:
+            self.control.hide()
+        self.app.quit()
+
     def _shutdown(self):
         self.engine.stop_flag.set()
-        for hid in (HOTKEY_EDIT, HOTKEY_HIDE):
+        for hid in (HOTKEY_EDIT, HOTKEY_HIDE, HOTKEY_RAIN):
             win32.unregister_hotkey(hid)
         self.save_config()
 
     def _keep_on_top(self):
         for w in self.widgets.values():
             w.keep_on_top()
+        tb = getattr(self, "toolbar", None)
+        if tb is not None and tb.isVisible():
+            win32.keep_on_top(tb)
 
     # ---- pagrindinis ciklas (UI) ----
     def _on_tick(self):
@@ -379,7 +449,7 @@ class OverlayApp(QObject):
         for name, w in self.widgets.items():
             if not w.isVisible():
                 continue
-            if self._tick % RATES.get(name, 1) == 0 or self.editing:
+            if self._tick % RATES.get(name, 1) == 0:
                 w.push(snap)
 
     def _auto_profile(self, snap):
@@ -481,6 +551,19 @@ class OverlayApp(QObject):
             self.act_edit.blockSignals(False)
         if self.control is not None:
             self.control.editing_changed(self.editing)
+        self._show_toolbar(self.editing)
+
+    def _show_toolbar(self, on: bool):
+        tb = getattr(self, "toolbar", None)
+        if on:
+            if tb is None:
+                from .edit_toolbar import EditToolbar
+                tb = self.toolbar = EditToolbar(self)
+            tb.place()
+            tb.show()
+            tb.raise_()
+        elif tb is not None:
+            tb.hide()
 
     # ---- tray ----
     def _make_tray(self):
@@ -515,7 +598,7 @@ class OverlayApp(QObject):
         self._profile_menu.aboutToShow.connect(self._fill_profile_menu)
         menu.addSeparator()
         quit_act = QAction("Quit LTH Overlays", menu)
-        quit_act.triggered.connect(self.app.quit)
+        quit_act.triggered.connect(self.quit)
         menu.addAction(quit_act)
         self.tray.setContextMenu(menu)
         self.tray.show()
@@ -599,20 +682,8 @@ class OverlayApp(QObject):
 
 
 def make_icon() -> QIcon:
-    pm = QPixmap(64, 64)
-    pm.fill(Qt.GlobalColor.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.RenderHint.Antialiasing)
-    p.setBrush(QColor(14, 14, 16))
-    p.setPen(QColor(226, 177, 60))
-    p.drawRoundedRect(2, 2, 60, 60, 12, 12)
-    f = QFont()
-    f.setPixelSize(40)
-    f.setBold(True)
-    p.setFont(f)
-    p.drawText(pm.rect(), Qt.AlignmentFlag.AlignCenter, "L")
-    p.end()
-    return QIcon(pm)
+    from .brand import app_icon
+    return app_icon()
 
 
 # ----------------------------------------------------------------------
@@ -642,7 +713,7 @@ def render_screenshot(oapp: OverlayApp, path: str, sim_seconds: float = 300):
             msgs = [Message("ahead", txt, 0, snap.t, snap.t)]
     snap.messages = msgs
     oapp.perf.update(cpu=0.6, ram=88, engine_us=46, fps=144)
-    vs = oapp.virtual_screen or QGuiApplication.primaryScreen().geometry()
+    vs = oapp.screen_rect()
     W, H = vs.width(), vs.height()
     img = QImage(W, H, QImage.Format.Format_ARGB32_Premultiplied)
     p = QPainter(img)

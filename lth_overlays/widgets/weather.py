@@ -24,6 +24,58 @@ class WeatherWidget(OverlayWidget):
         self._w = None
         super().__init__(ctx)
 
+    # ---- Rain Master call juostelė virš valdiklio ----
+    def push(self, snap, force=False):
+        super().push(snap, force)
+        self._sync_strip(snap)
+
+    def _sync_strip(self, snap):
+        call = None
+        if self.cfg.get("rain_calls", True) and self.isVisible():
+            call = getattr(snap, "rain_call", None)
+            if call is None and self.editing:
+                from lth_timing.rain_tips import CALLS, RainCall
+                t, k, d = CALLS["hidden_water"]
+                call = RainCall("hidden_water", t, k, d)
+        strip = getattr(self, "_strip", None)
+        if call is None:
+            if strip is not None and strip.isVisible():
+                strip.hide()
+            return
+        if strip is None:
+            from .rain import CallStrip
+            strip = self._strip = CallStrip(self)
+        if strip.call is None or strip.call.key != call.key or not strip.isVisible():
+            strip.set_call(call)
+            strip.show()
+        else:
+            strip.follow()
+
+    def moveEvent(self, e):
+        super().moveEvent(e)
+        strip = getattr(self, "_strip", None)
+        if strip is not None and strip.isVisible():
+            strip.follow()
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        strip = getattr(self, "_strip", None)
+        if strip is not None and strip.isVisible():
+            strip.follow()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        strip = getattr(self, "_strip", None)
+        if strip is not None:
+            strip.hide()
+
+    def keep_on_top(self):
+        super().keep_on_top()
+        strip = getattr(self, "_strip", None)
+        if strip is not None and strip.isVisible():
+            from .. import win32
+            win32.keep_on_top(strip)
+
     def wants_visible(self, snap) -> bool:
         c = self.cfg
         if not super().wants_visible(snap):
@@ -118,7 +170,7 @@ class WeatherWidget(OverlayWidget):
             on = i < max(0, w.wetness)
             col = pal.blue if (on and w.wetness > 1) else (pal.good if on else pal.row_alt)
             if not on:
-                col = pal.header
+                col = pal.track
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(col)
             p.drawRoundedRect(QRectF(10 + i * (seg_w + 3), y + lh * 0.25, seg_w, lh * 0.4), 2, 2)

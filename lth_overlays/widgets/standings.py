@@ -66,10 +66,6 @@ class StandingsWidget(TableWidget):
     def _build_rows(self, snap, cols):
         c = self.cfg
         cars = list(snap.cars)
-        if c.get("lth_only"):
-            ids = set(self.ctx.config.data.get("lth_member_ids") or [])
-            if ids:
-                cars = [r for r in cars if r.user_id in ids or r.is_me]
         me = next((r for r in cars if r.is_me), None)
         multiclass = snap.multiclass
         class_mode = c.get("class_mode", "grouped") if multiclass else "overall"

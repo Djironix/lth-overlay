@@ -67,6 +67,7 @@ class ControlCenter(QMainWindow):
         main.addWidget(self.stack, 1)
         h.addLayout(main, 1)
         self.setCentralWidget(root)
+        self.setAcceptDrops(True)
 
     # ------------------------------------------------------------------ rėmas
     def _sidebar(self):
@@ -78,13 +79,18 @@ class ControlCenter(QMainWindow):
         v.setSpacing(2)
         brand = QHBoxLayout()
         brand.setSpacing(10)
+        brand.setContentsMargins(8, 0, 0, 0)
         logo = QLabel()
-        from ..app import make_icon
-        logo.setPixmap(make_icon().pixmap(32, 32))
-        brand.addWidget(logo)
+        from ..brand import logo_pixmap
+        pm = logo_pixmap(24)
+        if pm.isNull():
+            from ..app import make_icon
+            pm = make_icon().pixmap(32, 32)
+        logo.setPixmap(pm)
+        brand.addWidget(logo, 0, Qt.AlignmentFlag.AlignVCenter)
         col = QVBoxLayout()
         col.setSpacing(0)
-        t = label("LTH Overlays")
+        t = label("Overlays")
         t.setFont(ui_font(15, QFont.Weight.DemiBold))
         col.addWidget(t)
         col.addWidget(label(f"v{VERSION}", "faint"))
@@ -112,7 +118,7 @@ class ControlCenter(QMainWindow):
         self._fill_profiles()
         v.addSpacing(10)
         q = button("Quit LTH Overlays", "ghost", "power")
-        q.clicked.connect(QApplication.instance().quit)
+        q.clicked.connect(self.ctx.quit)
         v.addWidget(q)
         return side
 
@@ -192,6 +198,29 @@ class ControlCenter(QMainWindow):
         self.raise_()
         self.activateWindow()
         self.tick(self.ctx.engine.latest)
+        if not self.ctx.config.data.get("onboarding_done"):
+            self.show_onboarding()
+
+    def show_onboarding(self):
+        from .onboarding import Onboarding
+        if getattr(self, "_onb", None) is not None:
+            return
+        self._onb = Onboarding(self)
+        self._onb.setGeometry(self.rect())
+        self._onb.finished.connect(self._onb_done)
+        self._onb.show()
+        self._onb.raise_()
+
+    def _onb_done(self):
+        self._onb = None
+        if self._current is not None:
+            self._current.on_show() if not isinstance(self._current, LayoutPage) else self._current.on_show(None)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        onb = getattr(self, "_onb", None)
+        if onb is not None:
+            onb.setGeometry(self.rect())
 
     # ------------------------------------------------------------------ iš programos
     def tick(self, snap):
@@ -277,6 +306,10 @@ class ControlCenter(QMainWindow):
 
     # ------------------------------------------------------------------ langas
     def closeEvent(self, e):
+        # programos uždarymas (Quit, Windows atsijungimas) - leidžiam; lango X - tik paslepiam į tray
+        if getattr(self.ctx, "quitting", False) or not e.spontaneous():
+            e.accept()
+            return
         e.ignore()
         self.hide()
         tray = getattr(self.ctx, "tray", None)
@@ -288,6 +321,26 @@ class ControlCenter(QMainWindow):
 
     def sizeHint(self):
         return QSize(1320, 860)
+
+    # ---- .lthlayout failo nutempimas ant lango ----
+    def dragEnterEvent(self, e):
+        if e.mimeData().hasUrls() or (e.mimeData().hasText() and "LTH1:" in e.mimeData().text()):
+            e.acceptProposedAction()
+
+    def dropEvent(self, e):
+        from .. import share
+        from .dialogs import ImportDialog
+        data = None
+        try:
+            if e.mimeData().hasUrls():
+                data = share.read_file(e.mimeData().urls()[0].toLocalFile())
+            else:
+                data = share.decode(e.mimeData().text())
+        except (OSError, ValueError) as err:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, "Import layout", str(err))
+            return
+        ImportDialog(self, data).exec()
 
 
 __all__ = ["ControlCenter", "IconTile", "T", "QTimer"]

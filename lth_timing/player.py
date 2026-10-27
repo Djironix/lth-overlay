@@ -35,6 +35,11 @@ FLAG_BITS = (
     (0x00000200, "one_to_green", "ONE LAP TO GREEN"), (0x00000004, "green", "GREEN"),
 )
 
+# Vairuotojo (ne sesijos) vėliavos: skaitomos iš CarIdxSessionFlags[aš]
+DRIVER_FLAG_MASK = 0x00000020 | 0x00010000 | 0x00020000 | 0x00080000 | 0x00100000  # blue, black, DQ, furled, repair
+FLAG_BLUE = 0x00000020
+BLUE_GRACE_S = 10.0  # po žalios vėliavos mėlyna dar nerodoma (rolling startas)
+
 # irsdk_PitSvFlags
 PIT_SV = ((0x01, "LF"), (0x02, "RF"), (0x04, "LR"), (0x08, "RR"), (0x10, "Fuel"), (0x20, "Tear-off"),
           (0x40, "Fast repair"))
@@ -153,6 +158,7 @@ class PlayerState:
     pace_mode: int = -1
     pace_row: int = -1
     pace_line: int = -1
+    tyre_compound: int = -1  # iRacing CarIdxTireCompound: 0 = sausos, 1 = lietaus (-1 = nežinoma)
 
 
 class PlayerTracker:
@@ -170,6 +176,7 @@ class PlayerTracker:
         self._laps = deque(maxlen=60)
         self._fuel_hist = deque(maxlen=5)
         self._stint_start = None
+        self._racing_since = None
         self._stint_lap0 = 0
         self._was_on_pit = None
         self._inc_prev = None
@@ -180,6 +187,7 @@ class PlayerTracker:
         self._inp = np.zeros((5, n), dtype=np.float32)
         self._inp_i = 0
         self._inp_n = 0
+        self.inp_seq = 0  # didėja su kiekvienu nauju mėginiu (Inputs valdiklis žino, ar perpiešti)
         self._g = deque(maxlen=20)
         self._last_t = None
         self._prev_fuel = None
@@ -199,6 +207,16 @@ class PlayerTracker:
         buf[4, i] = 1.0 if f.BrakeABSactive else 0.0
         self._inp_i = (i + 1) % buf.shape[1]
         self._inp_n = min(self._inp_n + 1, buf.shape[1])
+        self.inp_seq += 1
+
+    def input_trace(self, n: int):
+        """Paskutiniai n mėginių (5, n) - kopija; saugu skaityti iš UI gijos."""
+        buf, i, have = self._inp, self._inp_i, self._inp_n
+        n = min(n, have)
+        if n <= 1:
+            return None
+        idx = (np.arange(i - n, i)) % buf.shape[1]
+        return buf[:, idx]
 
     # ---- variklio dažniu (20 Hz) ----
     def update(self, f, t: float):
@@ -276,6 +294,29 @@ class PlayerTracker:
         lat, lon = f.LatAccel, f.LongAccel
         if lat is not None and lon is not None:
             self._g.append((float(lat) / G, float(lon) / G))
+
+    def _flag_bits(self, f, t: float) -> int:
+        """Sesijos vėliavos iš SessionFlags, vairuotojo - iš CarIdxSessionFlags[aš].
+        Mėlyna nerodoma prieš lenktynes, per parade / pace laps ir pirmas BLUE_GRACE_S po žalios."""
+        session = int(f.get("SessionFlags", 0) or 0)
+        bits = session & ~DRIVER_FLAG_MASK
+        pl = f.PlayerCarIdx
+        per_car = f.CarIdxSessionFlags
+        if per_car is not None and pl is not None and 0 <= pl < len(per_car):
+            bits |= int(per_car[pl]) & DRIVER_FLAG_MASK
+        else:  # senas iRacing / įrašas be kintamojo
+            bits |= session & DRIVER_FLAG_MASK
+        state = int(f.get("SessionState", 0) or 0)
+        pace = f.PaceMode
+        pacing = pace is not None and 0 <= int(pace) <= 3
+        if state >= 4 and not pacing:  # STATE_RACING
+            if self._racing_since is None:
+                self._racing_since = t
+        else:
+            self._racing_since = None
+        if self._racing_since is None or t - self._racing_since < BLUE_GRACE_S:
+            bits &= ~FLAG_BLUE
+        return bits
 
     # ---- būsena valdikliams ----
     def state(self, f, t: float, laps_remain: int, time_remain: float, race: bool) -> PlayerState:
@@ -381,10 +422,13 @@ class PlayerTracker:
             v = f.values.get(name)
             setattr(s, attr, float(v) if v is not None else None)
         # vėliavos
-        bits = int(f.get("SessionFlags", 0) or 0)
+        bits = self._flag_bits(f, t)
         s.flag_bits = bits
         s.flags = tuple((key, text) for bit, key, text in FLAG_BITS if bits & bit)
         # kita
+        tc = f.CarIdxTireCompound
+        if tc is not None and pl_ok(f, tc):
+            s.tyre_compound = int(tc[f.PlayerCarIdx])
         s.radio_idx = int(f.get("RadioTransmitCarIdx", -1) if f.RadioTransmitCarIdx is not None else -1)
         s.car_left_right = int(f.get("CarLeftRight", 0) or 0)
         s.pace_mode = int(f.get("PaceMode", -1) if f.PaceMode is not None else -1)
@@ -395,6 +439,11 @@ class PlayerTracker:
             s.pace_line = int(lines[pl]) if lines is not None else -1
         self._state = s
         return s
+
+
+def pl_ok(f, arr) -> bool:
+    pl = f.PlayerCarIdx
+    return pl is not None and 0 <= pl < len(arr)
 
 
 def _f(v, default=math.nan) -> float:

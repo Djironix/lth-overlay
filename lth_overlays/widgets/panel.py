@@ -94,7 +94,7 @@ class PanelWidget(OverlayWidget):
     def bar(self, p: QPainter, rect: QRectF, frac: float, color: QColor, back: QColor | None = None):
         frac = 0.0 if not math.isfinite(frac) else max(0.0, min(1.0, frac))
         p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(back if back is not None else self.pal.header)
+        p.setBrush(back if back is not None else self.pal.track)
         rad = min(rect.height() / 2, 3)
         p.drawRoundedRect(rect, rad, rad)
         if frac > 0:
