@@ -1,6 +1,6 @@
 # LTH Overlays — produkto ir darbų planas (handoff)
 
-Atnaujinta: 2026-10-27 · Bazė: v0.1.0 (pirmasis MVP) · Kitas tikslas: v0.2 (Control Center) ir v1.x (20 valdiklių)
+Atnaujinta: 2026-10-27 · Dabartinė versija: **v0.4.0** (live 0.3.1 + Control Center + 21 naujas valdiklis) · Toliau: Windows patikra, Engineer v1.1, Store
 
 ---
 
@@ -20,11 +20,31 @@ Atnaujinta: 2026-10-27 · Bazė: v0.1.0 (pirmasis MVP) · Kitas tikslas: v0.2 (C
    5. Trumpai parašyk vartotojui, kuo vietinė versija skiriasi nuo 1 skyriaus aprašymo. Tai ir yra „ką jau sutvarkė“. Šių pataisymų niekada neatšauk.
 3. **Darbo tvarka:** viena funkcija vienu metu → testai → demo patikra (`python run.py --demo`) → commit → trumpa žinutė vartotojui. Didelius dalykus (Control Center, naujus valdiklius) pirma aptark su vartotoju, o tik paskui rašyk kodą.
 4. **Nepažeidžiamos taisyklės:**
-   - Visa programos sąsaja **angliškai** (jokio lietuviško teksto UI). Numatytas šriftas **Saira Condensed** (ploni, NFS stiliaus).
+   - Visa programos sąsaja **angliškai** (jokio lietuviško teksto UI). Numatytas overlay stilius live versijoje: **Montserrat + „Modern dark“** (Saira Condensed liko pasirinkimuose). Control Center šriftas - Inter.
    - Overlay langai visada virš iRacing, pelė eina kiaurai, langai niekada nepaima fokuso (žr. `win32.py`).
    - Našumo biudžetas (5 skyrius): kiekviena nauja funkcija turi tilpti.
    - `config.json` suderinamumas: nauji nustatymai pridedami per numatytąsias reikšmes (`DEFAULT_WIDGETS`, `_merge`), seni vartotojų failai turi veikti toliau.
    - Antivirusams draugiškai: jokio PyInstaller one-file, UPX, klaviatūros hook'ų, admin teisių ar kodo atsisiuntimo.
+
+---
+
+## 0.1 v0.4.0 — kas padaryta (ant live 0.3.1)
+
+Bazė: draugo live `LTH-Overlays-0_3_1-win64.zip` (visi jo pataisymai palikti). Viskas angliškai UI.
+
+- **Control Center** (`lth_overlays/control/`): modernus SaaS stiliaus langas (Inter šriftas, tamsi tema, LTH auksinė spalva). Puslapiai: Overview, Widgets (katalogas su gyvomis miniatiūromis, paieška, kategorijos), valdiklio puslapis (schema → forma, X/Y/W/H, gyva peržiūra, Reset), **Layout** (visas ekranas sumažintas: tempti, keisti dydį kampu / kraštais, rodyklės, prilipimas, inspektorius), Profiles (naujas / pervadinti / dublikuoti / eksportas / importas / trinti, auto perjungimas, tema lygai / serijai), Appearance (temos, šriftai su pavyzdžiu, spalvų perrašymai, klasių spalvos), Hotkeys (keičiami, rodo ar užregistruota), General, Performance (grafikai), Diagnostics, About. Uždarius lieka tray'uje; paleidus ranka atsidaro; antras paleidimas atidaro jau veikiančios programos langą.
+- **Registras** `lth_overlays/registry.py`: vienas tiesos šaltinis (26 valdikliai, laukai, numatytos reikšmės, atnaujinimo dažnis). Naujas valdiklis = klasė + vienas `WidgetSpec`.
+- **Dydis**: aukštis keičiamas tempiant viršų / apačią (lentelės rodo tiek eilučių, kiek telpa), kampai - proporcingas mastelis, kraštai - plotis, dvigubas spustelėjimas - automatinis aukštis.
+- **Standings**: tavo klasė pagal filtrą (visi / top N + aplink / aplink), kitos klasės - top 3 (`other_classes_n`, 0 = paslėpti). Mažinant aukštį pirma trumpinamos kitos klasės, tavo eilutė lieka visada.
+- **Nauji valdikliai (21)**: Battle analysis, Lap history, Delta bar, Session (SOF), Flags, Radar, Pit helper, Pit window (išmatuotas pit loss + kur išvažiuosi), Incidents, Stint, Formation, Radio, Fuel, Dash, Inputs (60 Hz tik kai įjungtas), G-force, Tyres, Car setting changes, Engine warnings, Track map (įrašomas iš pirmo švaraus rato, saugomas `%APPDATA%\LTH Overlays\maps`), Connection. Visi numatytai išjungti.
+- **Autostart**: vietoj `.vbs` Startup aplanke dabar standartinis `HKCU\...\Run` įrašas (`--autostart`); senas `.vbs` automatiškai ištrinamas ir perkeliamas.
+- **Karštieji klavišai**: Ctrl+Shift+E (redagavimas), Ctrl+Shift+H (paslėpti viską), keičiami.
+- **Config v5**: seni failai migruojami, nauji laukai ateina per `_merge`.
+- Testai: 34 (15 seni + 19 nauji: registras, migracija, standings klasės / aukštis, žaidėjo duomenys, SOF, track map, visų valdiklių piešimas, Control Center, Layout tempimas pele).
+- Našumas: 3 numatyti valdikliai - kaip 0.3.1 (v0.4 priedai variklyje ~0,1 % branduolio); SOF / battle / pit skaičiuojami ~2 Hz kartu su standings.
+- Paleidiklis (.exe) nepakeistas (tas pats failas kaip 0.3.1, kad neprarastų SmartScreen reputacijos). Į paketą pridėtas Qt6Svg (ikonoms).
+
+**Dar patikrinti Windows'e (sandbox'e neįmanoma):** karštųjų klavišų perregistravimas, `HKCU Run` įrašas ir `.vbs` migracija, antro paleidimo žinutė, Track map krypties ženklas (jei trasa veidrodinė - Mirror / Rotate valdiklio nustatymuose), Tyres duomenų atnaujinimas trasoje, Radar su tikru `CarLeftRight`, `dc*` pavadinimai skirtingoms mašinoms.
 
 ---
 
@@ -247,12 +267,12 @@ Taisyklės kiekvienam naujam valdikliui:
 
 ## 8. Siūloma darbų eilė
 
-1. [ ] **Auditas** (0 skyrius): atsarginė kopija, testai, live versijos skirtumų sąrašas vartotojui.
-2. [ ] **Nustatymų schema** (3.2) + perkelti esamų 5 valdiklių nustatymus į ją.
-3. [ ] **Control Center** (3.3): puslapiai Overlays, valdiklių, Profiles, Theme, Hotkeys, Performance, Diagnostics.
-4. [ ] v1.1 valdikliai: Delta bar, Fuel, Flags, Radar, Lap history, Incidents, Setting popups, Connection warning, Pit helper, Battle analysis.
+1. [x] **Auditas** (0 skyrius): atsarginė kopija, testai, live versijos skirtumų sąrašas vartotojui.
+2. [x] **Nustatymų schema** (3.2) + perkelti esamų 5 valdiklių nustatymus į ją.
+3. [x] **Control Center** (3.3): puslapiai Overlays, valdiklių, Profiles, Theme, Hotkeys, Performance, Diagnostics.
+4. [x] v1.1 valdikliai: Delta bar, Fuel, Flags, Radar, Lap history, Incidents, Setting popups, Connection warning, Pit helper, Battle analysis.
 5. [ ] Engineer v1.1 žinutės.
-6. [ ] v1.2 valdikliai: Pit loss & strategy, Endurance stints, Tyres, Input graph, Track map, Engine warnings, Formation, Radio, Steward decisions.
+6. [x] v1.2 valdikliai (be Steward decisions - reikia API): Pit loss & strategy, Endurance stints, Tyres, Input graph, Track map, Engine warnings, Formation, Radio, G-force.
 7. [ ] Engineer web puslapis (žmogus prie mikrofono).
 8. [ ] Microsoft Store leidimas.
 

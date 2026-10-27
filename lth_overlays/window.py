@@ -14,13 +14,27 @@ from .theme import Fonts, Palette
 
 GRID = 8
 SNAP = 10
-GRIP = 14
+EDGE = 7  # krašto zona redaguojant (px)
+CORNER = 16  # kampo zona
+MIN_SCALE, MAX_SCALE = 0.5, 3.0
+
+_CURSORS = {"l": Qt.CursorShape.SizeHorCursor, "r": Qt.CursorShape.SizeHorCursor,
+            "t": Qt.CursorShape.SizeVerCursor, "b": Qt.CursorShape.SizeVerCursor,
+            "tl": Qt.CursorShape.SizeFDiagCursor, "br": Qt.CursorShape.SizeFDiagCursor,
+            "tr": Qt.CursorShape.SizeBDiagCursor, "bl": Qt.CursorShape.SizeBDiagCursor,
+            "move": Qt.CursorShape.SizeAllCursor}
 
 
 class OverlayWidget(QWidget):
     NAME = "base"
     TITLE = "Widget"
     MIN_WIDTH = 160
+    MIN_HEIGHT = 30
+    # Kaip elgiasi aukštis: "rows" - lentelė (aukštis = kiek eilučių telpa),
+    # "free" - grafika (piešiama į bet kokį aukštį), "auto" - pagal turinį
+    # (viršaus / apačios kraštas tada keičia viso valdiklio dydį).
+    HEIGHT_MODE = "auto"
+    preview_mode = False  # Control Center peržiūros kopija: be redagavimo rėmelio
 
     def __init__(self, ctx):
         flags = (Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
@@ -49,7 +63,7 @@ class OverlayWidget(QWidget):
         c = self.cfg
         self.fonts = Fonts(c.get("scale", 1.0), self.ctx.config.data.get("font", "saira"))
         self._texts = {}
-        self.pal = Palette(self.ctx.theme, c.get("opacity", 1.0))
+        self.pal = Palette(self.ctx.theme, c.get("opacity", 1.0), self.ctx.config.data.get("custom_colors"))
         self._key = object()  # priverstinis perpiešimas
         self._place()
         if self._snap is not None:
@@ -67,6 +81,35 @@ class OverlayWidget(QWidget):
 
     def min_width(self) -> int:
         return max(int(self.MIN_WIDTH * self._scale()), self.content_min_width())
+
+    def min_height(self) -> int:
+        return int(self.MIN_HEIGHT * self._scale())
+
+    def header_h(self) -> int:
+        """Antraštės aukštis (Standings / Relative / Weather...)."""
+        return round(self.fonts.em_small * 1.9) + 2 if self.cfg.get("show_header", True) else 4
+
+    def user_height(self) -> int | None:
+        """Vartotojo nustatytas aukštis (px su masteliu) arba None = pagal turinį."""
+        if self.HEIGHT_MODE == "auto":
+            return None
+        h = self.cfg.get("height")
+        try:
+            h = float(h) if h else 0.0
+        except (TypeError, ValueError):
+            h = 0.0
+        return int(round(h * self._scale())) if h > 0 else None
+
+    def avail_body_height(self) -> float | None:
+        """Kiek vietos eilutėms, kai aukštis nustatytas rankiniu būdu (lentelėms)."""
+        uh = self.user_height() if self.HEIGHT_MODE == "rows" else None
+        return None if uh is None else max(0.0, uh - self.header_h() - 6)
+
+    def final_height(self) -> int:
+        uh = self.user_height()
+        if uh:
+            return max(uh, self.min_height())
+        return max(self.desired_height(), 8)
 
     def target_width(self) -> int:
         return max(self.min_width(), int(round(int(self.cfg.get("width", 300)) * self._scale())))
@@ -91,7 +134,12 @@ class OverlayWidget(QWidget):
         c = self.cfg
         c["x"], c["y"] = self.x(), self.y()
         c["width"] = int(round(self.width() / self._scale()))
+        if self.HEIGHT_MODE != "auto" and c.get("height"):
+            c["height"] = int(round(self.height() / self._scale()))
         self.ctx.save_config()
+        notify = getattr(self.ctx, "geometry_changed", None)
+        if notify:
+            notify(self.NAME)
 
     # ---------------- tekstas su talpykla ----------------
     def draw_text(self, p: QPainter, rect: QRectF, text: str, font_key: str = "base", align: str = "l"):
@@ -182,7 +230,18 @@ class OverlayWidget(QWidget):
         return hh
 
     def wants_visible(self, snap) -> bool:
-        return bool(self.cfg.get("visible", True))
+        c = self.cfg
+        if not c.get("visible", True):
+            return False
+        if self.editing or snap is None:
+            return True
+        if c.get("hide_in_garage") and snap.in_garage and not snap.watching:
+            return False
+        if c.get("hide_when_spectating") and snap.watching:
+            return False
+        if c.get("race_only") and snap.session_type != "race":
+            return False
+        return True
 
     def push(self, snap, force=False):
         self._snap = snap
@@ -192,8 +251,8 @@ class OverlayWidget(QWidget):
         self._key = key
         if self.width() < self.min_width():  # įjungti nauji stulpeliai / platesnis šriftas
             self._place()
-        h = self.desired_height()
-        if h != self.height():
+        h = self.final_height()
+        if h != self.height() and self._drag is None:
             self.resize(self.width(), h)
         self.update()
 
@@ -206,6 +265,10 @@ class OverlayWidget(QWidget):
 
     def set_editing(self, on: bool):
         self.editing = on
+        self.setMouseTracking(on)
+        if not on:
+            self.unsetCursor()
+            self._drag = None
         if win32.IS_WIN:
             win32.set_click_through(self, not on)
         else:
@@ -231,67 +294,166 @@ class OverlayWidget(QWidget):
         p.fillRect(self.rect(), Qt.GlobalColor.transparent)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         self.paint_content(p)
-        if self.editing:
+        if self.editing and not self.preview_mode:
             self._paint_edit(p)
         p.end()
 
     def _paint_edit(self, p: QPainter):
         r = QRectF(self.rect()).adjusted(1, 1, -1, -1)
-        p.setPen(QPen(self.pal.edit, 2, Qt.PenStyle.DashLine))
-        p.setBrush(QColor(226, 177, 60, 24))
+        gold = self.pal.edit
+        p.setPen(QPen(gold, 1.5, Qt.PenStyle.DashLine))
+        p.setBrush(QColor(226, 177, 60, 22))
         p.drawRoundedRect(r, 6, 6)
+        # pavadinimas + dydis
         p.setFont(self.fonts.tiny)
-        label = f"{self.TITLE}  ·  drag to move, corner = width, Ctrl+wheel = size, right-click = settings"
-        tw = self.fonts.m_tiny.horizontalAdvance(label) + 12
-        p.fillRect(QRectF(4, 4, min(tw, self.width() - 8), 16), QColor(226, 177, 60, 220))
+        size = f"{self.width()}×{self.height()}  ·  {self._scale() * 100:.0f}%"
+        label = f"{self.TITLE}   {size}"
+        tw = min(self.fonts.m_tiny.horizontalAdvance(label) + 16, self.width() - 8)
+        chip = QRectF(4, 4, tw, 18)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(QColor(226, 177, 60, 235))
+        p.drawRoundedRect(chip, 4, 4)
         p.setPen(QColor(0, 0, 0))
-        p.drawText(QRectF(10, 4, self.width() - 16, 16), Qt.AlignmentFlag.AlignVCenter, label)
-        g = QRectF(self.width() - GRIP - 2, self.height() - GRIP - 2, GRIP, GRIP)
-        p.setPen(QPen(self.pal.edit, 2))
-        for i in range(3):
-            o = 4 + i * 4
-            p.drawLine(int(g.right() - o), int(g.bottom()), int(g.right()), int(g.bottom() - o))
+        p.drawText(chip.adjusted(8, 0, -4, 0), Qt.AlignmentFlag.AlignVCenter, label)
+        # rankenėlės: kampai (mastelis) ir kraštų vidurys (plotis / aukštis)
+        w, h = self.width(), self.height()
+        p.setPen(QPen(QColor(0, 0, 0, 160), 1))
+        p.setBrush(gold)
+        for x, y in ((0, 0), (w, 0), (0, h), (w, h)):
+            p.drawRoundedRect(QRectF(min(max(x - 5, 1), w - 11), min(max(y - 5, 1), h - 11), 10, 10), 2, 2)
+        p.setBrush(QColor(255, 255, 255))
+        for x, y in ((w / 2, 0), (w / 2, h), (0, h / 2), (w, h / 2)):
+            p.drawRoundedRect(QRectF(min(max(x - 4, 1), w - 9), min(max(y - 4, 1), h - 9), 8, 8), 2, 2)
 
     # ---------------- redagavimas pele ----------------
+    def _zone(self, pos) -> str:
+        x, y, w, h = pos.x(), pos.y(), self.width(), self.height()
+        left, right = x <= EDGE, x >= w - EDGE
+        top, bottom = y <= EDGE, y >= h - EDGE
+        near_l, near_r = x <= CORNER, x >= w - CORNER
+        near_t, near_b = y <= CORNER, y >= h - CORNER
+        if (top or left) and near_t and near_l:
+            return "tl"
+        if (top or right) and near_t and near_r:
+            return "tr"
+        if (bottom or left) and near_b and near_l:
+            return "bl"
+        if (bottom or right) and near_b and near_r:
+            return "br"
+        if left:
+            return "l"
+        if right:
+            return "r"
+        if top:
+            return "t"
+        if bottom:
+            return "b"
+        return "move"
+
     def mousePressEvent(self, e):
         if not self.editing:
             return
         if e.button() == Qt.MouseButton.RightButton:
             self.ctx.open_settings(self.NAME)
             return
-        pos = e.position().toPoint()
-        resize = pos.x() > self.width() - GRIP - 4 and pos.y() > self.height() - GRIP - 4
-        self._drag = ("resize" if resize else "move", e.globalPosition().toPoint(), self.geometry())
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        zone = self._zone(e.position().toPoint())
+        self._drag = (zone, e.globalPosition().toPoint(), self.geometry(), self._scale())
+
+    def mouseDoubleClickEvent(self, e):
+        """Dvigubas spustelėjimas redaguojant: aukštis vėl pagal turinį."""
+        if self.editing and self.HEIGHT_MODE != "auto":
+            self.cfg["height"] = None
+            self._drag = None
+            self.apply_settings()
+            self.save_geometry()
 
     def mouseMoveEvent(self, e):
-        if not self.editing or self._drag is None:
+        if not self.editing:
             return
-        mode, start, geo = self._drag
+        if self._drag is None:
+            self.setCursor(_CURSORS[self._zone(e.position().toPoint())])
+            return
+        zone, start, geo, scale0 = self._drag
         d = e.globalPosition().toPoint() - start
-        if mode == "move":
-            x, y = self._snap_xy(geo.x() + d.x(), geo.y() + d.y(), geo.width(), geo.height())
+        dx, dy = d.x(), d.y()
+        if zone == "move":
+            x, y = self._snap_xy(geo.x() + dx, geo.y() + dy, geo.width(), geo.height())
             self.move(x, y)
-        else:
-            w = max(self.min_width(), round((geo.width() + d.x()) / GRID) * GRID)
-            self.resize(w, self.height())
-            self._key = object()
-            if self._snap is not None:
-                self.push(self._snap, force=True)
+            return
+        if len(zone) == 2:  # kampas: proporcingas mastelis, priešingas kampas lieka vietoje
+            sx = 1 if "r" in zone else -1
+            sy = 1 if "b" in zone else -1
+            fx = (geo.width() + sx * dx) / max(geo.width(), 1)
+            fy = (geo.height() + sy * dy) / max(geo.height(), 1)
+            f = max(0.2, (fx + fy) / 2)
+            new_scale = round(min(MAX_SCALE, max(MIN_SCALE, scale0 * f)), 2)
+            if abs(new_scale - self._scale()) >= 0.01:
+                self.cfg["scale"] = new_scale
+                self._rescale_keep_corner(zone, geo)
+            return
+        x, y, w, h = geo.x(), geo.y(), geo.width(), geo.height()
+        if zone in ("l", "r"):
+            nw = round((w + (dx if zone == "r" else -dx)) / GRID) * GRID
+            nw = max(self.min_width(), nw)
+            if zone == "l":
+                x = x + w - nw
+            self.setGeometry(x, y, nw, h)
+            self.cfg["width"] = int(round(nw / self._scale()))
+        else:  # "t" / "b"
+            nh = h + (dy if zone == "b" else -dy)
+            if self.HEIGHT_MODE == "auto":  # aukštis pagal turinį: keičiam viso valdiklio dydį
+                new_scale = round(min(MAX_SCALE, max(MIN_SCALE, scale0 * nh / max(h, 1))), 2)
+                if abs(new_scale - self._scale()) >= 0.01:
+                    self.cfg["scale"] = new_scale
+                    self._rescale_keep_corner("br" if zone == "b" else "tr", geo)
+                return
+            nh = max(self.min_height(), round(nh / GRID) * GRID)
+            if zone == "t":
+                y = y + h - nh
+            self.cfg["height"] = int(round(nh / self._scale()))
+            self.setGeometry(x, y, w, nh)
+        self._key = object()
+        if self._snap is not None:
+            self.push(self._snap, force=True)
+
+    def _rescale_keep_corner(self, zone, geo):
+        self.fonts = Fonts(self._scale(), self.ctx.config.data.get("font", "saira"))
+        self._texts = {}
+        w = self.target_width()
+        self._key = object()
+        if self._snap is not None:
+            self.content_key(self._snap)
+        h = self.final_height()
+        x = geo.x() if "r" in zone else geo.x() + geo.width() - w
+        y = geo.y() if "b" in zone else geo.y() + geo.height() - h
+        self.setGeometry(x, y, w, h)
+        self.update()
 
     def mouseReleaseEvent(self, e):
         if self._drag is not None:
             self._drag = None
+            self.apply_settings_keep_pos()
             self.save_geometry()
+
+    def apply_settings_keep_pos(self):
+        pos = self.pos()
+        c = self.cfg
+        c["x"], c["y"] = pos.x(), pos.y()
+        self.apply_settings()
 
     def wheelEvent(self, e):
         if self.editing and e.modifiers() & Qt.KeyboardModifier.ControlModifier:
             c = self.cfg
             step = 0.05 if e.angleDelta().y() > 0 else -0.05
-            c["scale"] = round(min(2.5, max(0.6, c.get("scale", 1.0) + step)), 2)
-            self.apply_settings()
-            self.ctx.save_config()
+            c["scale"] = round(min(MAX_SCALE, max(MIN_SCALE, c.get("scale", 1.0) + step)), 2)
+            self.apply_settings_keep_pos()
+            self.save_geometry()
 
     def _snap_xy(self, x, y, w, h):
+        if not self.ctx.config.data.get("snap", True):
+            return x, y
         xs, ys = [], []
         scr = QGuiApplication.screenAt(QPoint(x + w // 2, y + h // 2)) or QGuiApplication.primaryScreen()
         sg: QRect = scr.availableGeometry()

@@ -26,7 +26,7 @@ class WeatherWidget(OverlayWidget):
 
     def wants_visible(self, snap) -> bool:
         c = self.cfg
-        if not c.get("visible", True):
+        if not super().wants_visible(snap):
             return False
         if c.get("only_when_wet") and snap.weather is not None and snap.weather.wetness <= 1 and not self.editing:
             return False

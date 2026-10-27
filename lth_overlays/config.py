@@ -13,71 +13,14 @@ import sys
 
 APP_DIR_NAME = "LTH Overlays"
 
-STANDINGS_COLUMNS = {
-    # raktas: (pavadinimas, numatyta)
-    "pos": ("Position", True),
-    "change": ("Change this lap", True),
-    "number": ("Car number", True),
-    "brand": ("Manufacturer", True),
-    "name": ("Name", True),
-    "gap": ("Gap to leader", True),
-    "interval": ("Interval", True),
-    "last": ("Last lap", True),
-    "best": ("Best lap", True),
-    "start": ("Positions since start", False),
-    "irating": ("iRating", True),
-    "license": ("License", False),
-    "pit": ("Pit", True),
-    "tire": ("Tyres", True),
-}
+# Valdiklių aprašai ir numatyti nustatymai - registry.py (vienas tiesos šaltinis)
+from .registry import (DEFAULT_WIDGETS, ENGINEER_TYPES, RELATIVE_COLUMNS,  # noqa: E402,F401
+                       STANDINGS_COLUMNS, WEATHER_FIELDS)
 
-RELATIVE_COLUMNS = {
-    "pos": ("Position", True),
-    "number": ("Car number", True),
-    "name": ("Name", True),
-    "irating": ("iRating", True),
-    "license": ("License", True),
-    "delta": ("Delta per lap", True),
-    "catch": ("Laps to catch", True),
-    "gap": ("Gap", True),
-}
-
-WEATHER_FIELDS = {
-    "wetness": ("Track wetness", True),
-    "track_temp": ("Track temperature", True),
-    "air_temp": ("Air temperature", True),
-    "precip": ("Rain", True),
-    "skies": ("Sky", True),
-    "wind": ("Wind", True),
-    "humidity": ("Humidity", False),
-    "fog": ("Fog", False),
-    "time": ("Time of day", True),
-    "trend": ("Trend", True),
-}
-
-
-def _cols(spec):
-    return {k: v[1] for k, v in spec.items()}
-
-
-DEFAULT_WIDGETS = {
-    "standings": {"visible": True, "x": 24, "y": 180, "width": 500, "scale": 1.0, "opacity": 1.0,
-                  "columns": _cols(STANDINGS_COLUMNS), "order": list(STANDINGS_COLUMNS),
-                  "filter": "all", "top_n": 3, "around_n": 5, "max_rows": 26,
-                  "class_mode": "grouped", "name_mode": "abbrev", "lth_only": False, "show_header": True},
-    "relative": {"visible": True, "x": -500, "y": -340, "width": 420, "scale": 1.0, "opacity": 1.0,
-                 "columns": _cols(RELATIVE_COLUMNS), "order": list(RELATIVE_COLUMNS),
-                 "ahead": 4, "behind": 4, "name_mode": "abbrev", "show_header": True},
-    "weather": {"visible": True, "x": -300, "y": 24, "width": 270, "scale": 1.0, "opacity": 1.0,
-                "fields": _cols(WEATHER_FIELDS), "mode": "expanded", "only_when_wet": False},
-    "engineer": {"visible": False, "x": -1, "y": 90, "width": 560, "scale": 1.0, "opacity": 1.0,
-                 "types": {"ahead": True, "behind": True, "slow_car": True, "weather": True, "best_lap": True,
-                           "time": True, "faster_class": True}},
-    "perf": {"visible": False, "x": 24, "y": 24, "width": 230, "scale": 1.0, "opacity": 1.0},
-}
+CONFIG_VERSION = 5
 
 DEFAULT_CONFIG = {
-    "version": 4,
+    "version": CONFIG_VERSION,
     "autostart": True,  # paleisti su Windows; laukia, kol įsijungs iRacing
     "autostart_done": False,
     "theme": "racelab",
@@ -88,6 +31,11 @@ DEFAULT_CONFIG = {
     "profile": "race",
     "lth_member_ids": [],  # iRacing ID sąrašas filtrui „tik LTH lyga“
     "series_themes": {},  # {"league:12345": "lth", "series:228": "minimal"}
+    "custom_colors": {},  # vartotojo spalvų perrašymai temai: {"accent": "#e2b13c", ...}
+    "class_colors": {},  # klasės spalvos perrašymas: {"GT3": "#ff5888"}
+    "hotkeys": {"edit": "Ctrl+Shift+E", "toggle_all": "Ctrl+Shift+H"},
+    "open_control_center": True,  # atidaryti Control Center paleidus ranka
+    "snap": True,  # prilipimas prie tinklelio ir kitų valdiklių
     "profiles": {
         "race": {"name": "Race", "widgets": copy.deepcopy(DEFAULT_WIDGETS)},
         "qualify": {"name": "Qualifying", "widgets": copy.deepcopy(DEFAULT_WIDGETS)},
@@ -141,7 +89,8 @@ class Config:
                                 wc["width"] = int(round(float(wc["width"]) / s))
                         except (TypeError, ValueError, AttributeError):
                             pass
-            raw["version"] = 4
+            # v5: nauji valdikliai ir laukai ateina iš numatytų reikšmių (_merge)
+            raw["version"] = CONFIG_VERSION
             self.data = _merge(DEFAULT_CONFIG, raw)
         except (OSError, ValueError):
             self.data = copy.deepcopy(DEFAULT_CONFIG)
@@ -164,7 +113,25 @@ class Config:
             self.data["profile"] = key
 
     def widget(self, name: str) -> dict:
-        return self.data["profiles"][self.profile_key]["widgets"][name]
+        widgets = self.data["profiles"][self.profile_key]["widgets"]
+        if name not in widgets:  # naujas valdiklis profilyje, kuris jo dar neturėjo
+            widgets[name] = copy.deepcopy(DEFAULT_WIDGETS[name])
+        return widgets[name]
+
+    def add_profile(self, key: str, name: str, copy_from: str | None = None):
+        src = self.data["profiles"].get(copy_from or self.profile_key)
+        widgets = copy.deepcopy(src["widgets"]) if src else copy.deepcopy(DEFAULT_WIDGETS)
+        self.data["profiles"][key] = {"name": name, "widgets": widgets}
+
+    def delete_profile(self, key: str):
+        if key in ("race", "qualify", "practice"):
+            raise ValueError("Built-in profiles cannot be deleted")
+        self.data["profiles"].pop(key, None)
+        if self.profile_key == key:
+            self.data["profile"] = "race"
+
+    def reset_widget(self, name: str):
+        self.data["profiles"][self.profile_key]["widgets"][name] = copy.deepcopy(DEFAULT_WIDGETS[name])
 
     def theme_for(self, league_id: int, series_id: int) -> str:
         st = self.data.get("series_themes", {})

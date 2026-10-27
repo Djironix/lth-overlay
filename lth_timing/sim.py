@@ -78,6 +78,9 @@ class SimRace:
         self.pit_car = int(order[3]) if n_cars > 4 else None
         self.off_car = int(order[min(n_cars - 1, 8)]) if n_cars > 9 else None
         self._pit_state = {}
+        self._v = np.zeros(n_cars)
+        self._v_prev_me = 0.0
+        self._geom = _track_geometry(track_m)
         self.traj_t = []
         self.traj_p = []
         self.model = self._model()
@@ -106,6 +109,8 @@ class SimRace:
                 m.classes[c] = {"name": CLASSES[c]["name"], "color": CLASSES[c]["color"],
                                 "est_lap": self.track_m / 45.0 / CLASSES[c]["pace"]}
         m.sessions[0] = SessionDesc(num=0, type="race", name="RACE", laps="unlimited")
+        m.sectors = [0.0, 0.28, 0.61]
+        m.track_id = 999
         return m
 
     # ---- fizika ----
@@ -127,6 +132,8 @@ class SimRace:
         for c, st in self._pit_state.items():
             if st[0] == "stall" and t < st[1]:
                 v[c] = 0.0
+        self._v_prev_me = float(self._v[self.me])
+        self._v = v
         new_prog = self.prog + v * dt / self.track_m
         # ratų laikai
         crossed = np.floor(new_prog) > np.floor(self.prog)
@@ -229,7 +236,68 @@ class SimRace:
             "WeatherDeclaredWet": w["wet"] >= 4, "Skies": 3 if self.rain else 1, "WindVel": 4.2, "WindDir": 1.1,
             "RelativeHumidity": 0.72, "FogLevel": 0.0, "SolarAltitude": 0.6,
         })
+        vals.update(self._player_vals(my_pct))
+        vals["CarIdxPaceRow"] = np.full(MAX_CARS, -1, dtype=np.int32)
+        vals["CarIdxPaceLine"] = np.full(MAX_CARS, -1, dtype=np.int32)
         return Frame(vals)
+
+    def _player_vals(self, pct: float) -> dict:
+        """Savo mašinos duomenys demo režimui: kuras, input'ai, G, padangos, vėliavos..."""
+        me, t = self.me, self.t
+        prog = float(self.prog[me])
+        v = float(self._v[me]) if self._v[me] > 0 else float(self.speed_at(pct))
+        dv = (v - self._v_prev_me) / self.dt
+        yaw, curv = _geom_at(self._geom, pct)
+        ahead = float(self.speed_at((pct + 0.01) % 1.0))
+        braking = ahead < v - 1.0
+        brake = float(np.clip((v - ahead) / 10.0, 0, 1)) if braking else 0.0
+        throttle = 0.0 if braking else float(np.clip(0.55 + (ahead - v) / 6.0 + (0.45 if v > 60 else 0.0), 0.1, 1.0))
+        gear = int(np.clip(v // 12 + 1, 1, 6))
+        lap_done = max(int(math.floor(prog)), 0)
+        fuel = max(1.0, 62.0 - 2.62 * max(prog, 0.0))
+        best = float(self.best[me])
+        delta = 0.25 * math.sin(2 * math.pi * pct * 2) + 0.05 * math.sin(t / 7.0)
+        d = (((self.prog % 1.0) - (prog % 1.0) + 0.5) % 1.0 - 0.5) * self.track_m
+        d[me] = 1e9
+        near = np.nonzero(np.abs(d) < 5.0)[0]
+        clr = 1 if len(near) == 0 else (2 if near[0] % 2 else 3)
+        flags = 0x00000004 if t < 8 else 0
+        if 400 <= t % 900 < 412:
+            flags |= 0x00000008
+        bias = 54.2 if (t % 240) < 120 else 53.8
+        temps = {}
+        for i, wcorner in enumerate(("LF", "RF", "LR", "RR")):
+            base = 82.0 + 6 * math.sin(t / 30.0 + i) + (4 if wcorner[0] == "L" else 0)
+            temps[wcorner] = (base + 4, base + 1, base - 2)
+        vals = {
+            "Speed": v, "YawNorth": yaw, "Throttle": throttle, "Brake": brake, "Clutch": 1.0,
+            "SteeringWheelAngle": float(np.clip(curv * 50.0, -1.6, 1.6)), "BrakeABSactive": brake > 0.85,
+            "Gear": gear, "RPM": 4200.0 + (v % 12) / 12 * 3800.0, "LatAccel": float(v * v * curv),
+            "LongAccel": float(np.clip(dv, -30, 15)),
+            "FuelLevel": fuel, "FuelLevelPct": fuel / 80.0, "Lap": lap_done + 1, "LapCompleted": lap_done,
+            "LapDistPct": pct, "LapLastLapTime": float(self.lap_times[me]) if self.lap_times[me] > 0 else -1.0,
+            "LapBestLapTime": best if best > 0 else -1.0,
+            "LapCurrentLapTime": float(t - self.lap_start_t[me]) if np.isfinite(self.lap_start_t[me]) else 0.0,
+            "LapDeltaToBestLap": delta, "LapDeltaToBestLap_OK": best > 0,
+            "LapDeltaToOptimalLap": delta + 0.18, "LapDeltaToOptimalLap_OK": best > 0,
+            "LapDeltaToSessionBestLap": delta + 0.42, "LapDeltaToSessionBestLap_OK": best > 0,
+            "LapDeltaToSessionLastlLap": delta - 0.1, "LapDeltaToSessionLastlLap_OK": best > 0,
+            "OnPitRoad": bool(self.on_pit[me]), "PlayerCarInPitStall": False, "PitSvFlags": 0x1F, "PitSvFuel": 40.0,
+            "PitRepairLeft": 0.0, "PitOptRepairLeft": 0.0, "FastRepairAvailable": 1,
+            "EngineWarnings": 0x10 if self.on_pit[me] else 0, "WaterTemp": 92.0, "OilTemp": 104.0, "OilPress": 5.1,
+            "FuelPress": 3.4, "Voltage": 13.8, "ChanQuality": 0.99, "ChanPartnerQuality": 0.98,
+            "ChanLatency": 0.041, "ChanAvgLatency": 0.043, "PlayerCarMyIncidentCount": 2 + (2 if t > 300 else 0),
+            "PlayerCarTeamIncidentCount": 2 + (2 if t > 300 else 0), "PlayerCarDriverIncidentCount": 2,
+            "CarLeftRight": clr, "PaceMode": 4, "RadioTransmitCarIdx": int(t // 40) % self.n if (t % 40) < 4 else -1,
+            "DCDriversSoFar": 1, "DCLapStatus": 0, "PlayerCarTowTime": 0.0, "SessionFlags": flags,
+            "dcBrakeBias": bias, "dcTractionControl": 3.0, "dcABS": 4.0, "_dc": ["dcBrakeBias", "dcTractionControl", "dcABS"],
+            "LFcoldPressure": 172.0, "RFcoldPressure": 172.0, "LRcoldPressure": 165.0, "RRcoldPressure": 165.0,
+        }
+        wear = max(0.6, 1.0 - 0.01 * max(prog, 0.0))
+        for wcorner, (a, b, c) in temps.items():
+            vals[f"{wcorner}tempCL"], vals[f"{wcorner}tempCM"], vals[f"{wcorner}tempCR"] = a, b, c
+            vals[f"{wcorner}wearL"], vals[f"{wcorner}wearM"], vals[f"{wcorner}wearR"] = wear, wear + 0.01, wear - 0.01
+        return vals
 
     def _weather(self):
         if not self.rain:
@@ -247,3 +315,26 @@ class SimRace:
         """Kada behind buvo dabartinėje vietoje minus kada ahead ten buvo."""
         p_b = self.traj_p[t_idx][behind]
         return self.traj_t[t_idx] - self.true_time_at(ahead, p_b)
+
+
+def _track_geometry(track_m: float):
+    """Uždara trasa su 3 lėtais posūkiais; grąžina (pct, x, y, yaw, kreivumas) lenteles."""
+    th = np.linspace(0, 2 * np.pi, 4001)
+    r = 1.0 + 0.28 * np.cos(3 * th + 0.4) + 0.08 * np.sin(5 * th)
+    x, y = r * np.cos(th), r * np.sin(th)
+    seg = np.hypot(np.diff(x), np.diff(y))
+    s = np.concatenate([[0], np.cumsum(seg)])
+    scale = track_m / s[-1]
+    x, y, s = x * scale, y * scale, s * scale
+    dx, dy = np.gradient(x), np.gradient(y)
+    ddx, ddy = np.gradient(dx), np.gradient(dy)
+    yaw = np.arctan2(dx, dy)
+    curv = (dx * ddy - dy * ddx) / np.maximum((dx * dx + dy * dy) ** 1.5, 1e-9)
+    return s / track_m, yaw, curv
+
+
+def _geom_at(geom, pct: float):
+    p, yaw, curv = geom
+    i = int(np.searchsorted(p, pct % 1.0))
+    i = min(max(i, 0), len(p) - 1)
+    return float(yaw[i]), float(curv[i])

@@ -71,8 +71,13 @@ def load_fonts():
 
 
 class Palette:
-    def __init__(self, theme: str = "lth", opacity: float = 1.0):
-        t = THEMES.get(theme, THEMES["lth"])
+    def __init__(self, theme: str = "lth", opacity: float = 1.0, overrides: dict | None = None):
+        t = dict(THEMES.get(theme, THEMES["lth"]))
+        for k, v in (overrides or {}).items():  # vartotojo spalvos (Control Center → Appearance)
+            if k in t and isinstance(v, str) and v.startswith("#") and len(v) in (7, 9):
+                c = QColor(v)
+                if c.isValid():
+                    t[k] = (c.red(), c.green(), c.blue()) if len(t[k]) == 3 else (c.red(), c.green(), c.blue(), t[k][3])
         self.key = theme
         self.bg = QColor(*t["bg"], int(255 * t["bg_alpha"] * opacity))
         self.header = QColor(*t["header"], int(255 * min(1.0, t["bg_alpha"] * opacity + 0.08)))
@@ -130,6 +135,11 @@ class Fonts:
         self.m_bold = QFontMetricsF(self.bold)
         self.m_small = QFontMetricsF(self.small)
         self.m_tiny = QFontMetricsF(self.tiny)
+        self.huge = self._font(self.big.pixelSize() * 1.9, QFont.Weight.Bold)
+        self.mid = self._font(self.base.pixelSize() * 1.35, QFont.Weight.DemiBold)
+        self.m_big = QFontMetricsF(self.big)
+        self.m_huge = QFontMetricsF(self.huge)
+        self.m_mid = QFontMetricsF(self.mid)
         # Layout units from the pixel size, not the font's line height (condensed racing
         # fonts have very tall line gaps, which would make rows too high).
         em_k = 1.45 if wide else 1.22  # Montserrat turi didesnį skaitmenų aukštį

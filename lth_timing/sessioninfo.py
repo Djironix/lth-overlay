@@ -117,7 +117,11 @@ class SessionDesc:
 @dataclass
 class SessionModel:
     track_name: str = ""
+    track_id: int = 0
+    track_config: str = ""
     track_length_m: float = 0.0
+    sectors: list = field(default_factory=list)  # sektorių pradžios (0..1), iš SplitTimeInfo
+    fuel_max_l: float = 0.0  # bako talpa × DriverCarMaxFuelPct (0 = nežinoma)
     league_id: int = 0
     series_id: int = 0
     team_racing: bool = False
@@ -130,6 +134,13 @@ class SessionModel:
     @property
     def multiclass(self) -> bool:
         return len(self.classes) > 1
+
+    @property
+    def track_key(self) -> str:
+        """Unikalus trasos + konfigūracijos raktas (trasos žemėlapio failui)."""
+        cfg = re.sub(r"[^A-Za-z0-9]+", "_", self.track_config or "").strip("_")
+        name = re.sub(r"[^A-Za-z0-9]+", "_", self.track_name or "track").strip("_")
+        return f"{self.track_id or name}_{cfg}" if cfg else f"{self.track_id or name}"
 
     def session_type(self, num: int) -> str:
         s = self.sessions.get(num)
@@ -157,12 +168,23 @@ def build_model(data: dict, update: int = -1) -> SessionModel:
     m.track_name = str(wi.get("TrackDisplayName") or wi.get("TrackName") or "")
     length = str(wi.get("TrackLength") or "0 km")
     m.track_length_m = _num(length) * (1609.344 if "mi" in length else 1000.0)
+    m.track_id = int(_num(wi.get("TrackID"), 0))
+    m.track_config = str(wi.get("TrackConfigName") or "")
     m.league_id = int(_num(wi.get("LeagueID"), 0))
     m.series_id = int(_num(wi.get("SeriesID"), 0))
     m.team_racing = bool(int(_num(wi.get("TeamRacing"), 0)))
 
+    sti = data.get("SplitTimeInfo") or {}
+    starts = sorted({float(_num(x.get("SectorStartPct"), -1)) for x in (sti.get("Sectors") or [])
+                     if isinstance(x, dict)})
+    m.sectors = [v for v in starts if 0.0 <= v < 1.0] or [0.0, 1 / 3, 2 / 3]
+    if m.sectors[0] != 0.0:
+        m.sectors.insert(0, 0.0)
+
     di = data.get("DriverInfo") or {}
     m.driver_car_idx = int(_num(di.get("DriverCarIdx"), -1))
+    tank = _num(di.get("DriverCarFuelMaxLtr"), 0.0)
+    m.fuel_max_l = tank * (_num(di.get("DriverCarMaxFuelPct"), 1.0) or 1.0)
     for d in di.get("Drivers") or []:
         try:
             idx = int(d.get("CarIdx"))

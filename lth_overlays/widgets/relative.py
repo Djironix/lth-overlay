@@ -10,6 +10,7 @@ class RelativeWidget(TableWidget):
     NAME = "relative"
     TITLE = "Relative"
     MIN_WIDTH = 220
+    HEIGHT_MODE = "rows"
     WIDTHS = {"classbar": 0.01, "pos": 1.8, "number": 2.4, "name": None, "irating": 2.8, "license": 3.0,
               "delta": 3.6, "catch": 3.0, "gap": 3.4}
 
@@ -27,6 +28,11 @@ class RelativeWidget(TableWidget):
         me_i = next((i for i, r in enumerate(rel) if r.is_me), None)
         if me_i is not None:
             a, b = int(c.get("ahead", 3)), int(c.get("behind", 3))
+            avail = self.avail_body_height()
+            if avail is not None:  # aukštis nustatytas tempiant: tiek eilučių, kiek telpa
+                n = max(1, int(avail // self.row_h()))
+                a = (n - 1) // 2
+                b = n - 1 - a
             rel = rel[max(0, me_i - a): me_i + b + 1]
         race = snap.session_type == "race"
         rows = [self._row(r, cols, snap, race) for r in rel]
@@ -94,9 +100,8 @@ class RelativeWidget(TableWidget):
         return Cell("delta", "= 0.0", fg="dim", align=RIGHT, font="small")
 
     def desired_height(self) -> int:
-        head = round(self.fonts.em_small * 1.9) + 2 if self.cfg.get("show_header", True) else 4
         n = max(1, len(self._rows))
-        return int(head + self.row_h() * n + 6)
+        return int(self.header_h() + self.row_h() * n + 6)
 
     def paint_content(self, p):
         if not self._rows and not self.editing:

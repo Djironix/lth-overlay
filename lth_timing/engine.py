@@ -33,7 +33,9 @@ import numpy as np
 
 from .frame import (MAX_CARS, STATE_CHECKERED, STATE_RACING, SURF_NOT_IN_WORLD,
                     SURF_OFF_TRACK, Frame)
+from .player import PlayerTracker
 from .sessioninfo import SessionModel
+from .trackmap import TrackMap
 from .weather import WeatherTracker
 
 POINT_SPACING_M = 50.0
@@ -123,14 +125,26 @@ class Snapshot:
     league_id: int = 0
     series_id: int = 0
     stats: dict = field(default_factory=dict)
+    track_name: str = ""
+    sectors: list = field(default_factory=list)
+    player: object = None  # PlayerState
+    track_map: dict = field(default_factory=dict)  # points, recording, progress
+    pit: dict = field(default_factory=dict)  # lane_loss, stop_loss, samples
+    battle: list = field(default_factory=list)  # sektorių palyginimas su mašinomis šalia
+    sof: dict = field(default_factory=dict)  # klasė -> SOF (0 = bendras)
+    car_pct: object = None  # np.ndarray: kiekvienos mašinos rato dalis šiame kadre (trasos žemėlapiui)
 
 
 class TimingEngine:
     def __init__(self, point_spacing_m: float = POINT_SPACING_M, history_laps: int = HISTORY_LAPS,
-                 rate_hz: float = 20.0, standings_hz: float = 2.0):
+                 rate_hz: float = 20.0, standings_hz: float = 2.0, maps_dir: str | None = None):
+        self.player = PlayerTracker()
+        self.trackmap = TrackMap(maps_dir)
+        self.pit_losses = []
         self._min_dt = 1.0 / rate_hz - 0.004 if rate_hz < 60 else 0.0
         self._standings_dt = 1.0 / standings_hz
         self._rows_cache = None  # (t, rows)
+        self._derived = None  # (rows, sof, battle, pit)
         self.spacing = point_spacing_m
         self.history_laps = history_laps
         self.session: SessionModel | None = None
@@ -172,6 +186,13 @@ class TimingEngine:
         self._shown = {}  # (idx, ref) -> (value, t, was_stale, blend)
         self._race_started = False
         self._rows_cache = None
+        self._derived = None
+        self.pit_in = {}  # idx -> (progresas, laikas) įvažiuojant į boksus
+        self.pit_stationary = np.zeros(n)  # kiek s stovėjo boksuose šio sustojimo metu
+        self.pit_losses = []  # (klasė, viso nuostolis, boksų tako nuostolis)
+        self._prev_proc_t = None
+        if hasattr(self, "player"):
+            self.player.reset()
 
     def set_session(self, model: SessionModel | None):
         if model is None or model is self.session:
@@ -180,6 +201,9 @@ class TimingEngine:
         self.session = model
         if model.track_length_m and model.track_length_m != old_len:
             self._init_track(model.track_length_m)
+        self.player.fuel_max_l = model.fuel_max_l
+        if model.track_length_m:
+            self.trackmap.set_track(model.track_key)
 
     # ------------------------------------------------------------------
     # Kadro apdorojimas (60 Hz)
@@ -190,6 +214,7 @@ class TimingEngine:
         todėl tikslumas toks pat kaip 60 Hz (patikrinta iki 15 Hz) už trečdalį kainos."""
         self.frame = f
         self.stats["frames"] += 1
+        self.player.sample_inputs(f)
         t = float(f.SessionTime)
         num = f.SessionNum
         # Nauja sesija arba šuolis laike (replay) -> pradedam iš naujo
@@ -204,6 +229,10 @@ class TimingEngine:
         self._last_t = t
         self.stats["processed"] = self.stats.get("processed", 0) + 1
         self.weather.update(f)
+        self.player.update(f, t)
+        self.trackmap.update(f, t)
+        dt_proc = t - self._prev_proc_t if self._prev_proc_t is not None else 0.0
+        self._prev_proc_t = t
 
         pct = f.CarIdxLapDistPct.astype(np.float64)
         lap_started = f.CarIdxLap
@@ -216,8 +245,16 @@ class TimingEngine:
             exited = self.on_pit & ~on_pit
             for c in np.nonzero(exited)[0]:
                 self.pit_exit_lap[c] = self.lap_ctr[c]
+                self._pit_loss(int(c), t)
             entered = ~self.on_pit & on_pit & self.known
             self.pit_stops[entered] += 1
+            for c in np.nonzero(entered)[0]:
+                self.pit_in[int(c)] = (self.obs_prog[c], self.obs_t[c])
+                self.pit_stationary[c] = 0.0
+            # stovėjimas boksuose: pozicija nesikeičia > 0,5 s
+            if dt_proc > 0:
+                stopped = self.on_pit & self.known & (t - self.obs_t > 0.5)
+                self.pit_stationary[stopped] += dt_proc
             self.on_pit[:] = on_pit
 
         valid = pct >= 0.0
@@ -434,7 +471,99 @@ class TimingEngine:
             rows = cache[1]
         snap.cars = rows
         snap.relative = self._relative(f, t, me, rows, snap)
+        race = snap.session_type == "race"
+        snap.player = self.player.state(f, t, snap.laps_remain, snap.time_remain, race)
+        tm = self.trackmap
+        snap.track_map = {"points": tm.points, "recording": tm.recording, "progress": tm.progress}
+        snap.track_name = m.track_name if m else ""
+        snap.sectors = list(m.sectors) if m and m.sectors else [0.0, 1 / 3, 2 / 3]
+        # SOF, sektorių palyginimas, boksų nuostoliai keičiasi retai - kartu su standings (~2 Hz)
+        dc = self._derived
+        if dc is None or dc[0] is not rows:
+            dc = self._derived = (rows, self._sof(rows), self._battle(me, snap.relative, snap.sectors),
+                                  self._pit_summary())
+        snap.sof, snap.battle, snap.pit = dc[1], dc[2], dc[3]
+        pct = f.CarIdxLapDistPct
+        snap.car_pct = None if pct is None else np.array(pct, dtype=np.float32)
         return snap
+
+    # ------------------------------------------------------------------
+    # Boksai, SOF, sektoriai
+    # ------------------------------------------------------------------
+    def _pit_loss(self, c: int, t: float):
+        """Kiek laiko kainavo sustojimas: boksų kelias, palyginus su tuo pačiu
+        trasos ruožu ankstesniame rate."""
+        start = self.pit_in.pop(c, None)
+        if start is None:
+            return
+        prog_in, t_in = start
+        prog_out, t_out = self.obs_prog[c], self.obs_t[c]
+        if not (np.isfinite(prog_in) and np.isfinite(prog_out) and np.isfinite(t_in)):
+            return
+        a = self.time_at(c, prog_in - 1.0)
+        b = self.time_at(c, prog_out - 1.0)
+        if not (math.isfinite(a) and math.isfinite(b)) or b <= a:
+            return
+        total = (t_out - t_in) - (b - a)
+        lane = total - float(self.pit_stationary[c])
+        if 3.0 < total < 300.0:
+            m = self.session
+            cid = m.drivers[c].class_id if m and c in m.drivers else 0
+            self.pit_losses.append((cid, total, max(0.0, lane)))
+            del self.pit_losses[:-40]
+
+    def _pit_summary(self) -> dict:
+        if not self.pit_losses:
+            return {"samples": 0, "lane_loss": None, "stop_loss": None}
+        totals = sorted(x[1] for x in self.pit_losses)
+        lanes = sorted(x[2] for x in self.pit_losses)
+        return {"samples": len(totals), "lane_loss": lanes[len(lanes) // 2], "stop_loss": totals[len(totals) // 2]}
+
+    @staticmethod
+    def _sof(rows) -> dict:
+        """iRacing stiprumo formulė (Strength of Field) kiekvienai klasei ir bendrai."""
+        out = {}
+        groups = {0: [r.irating for r in rows if r.irating > 0]}
+        for r in rows:
+            if r.irating > 0:
+                groups.setdefault(r.class_id, []).append(r.irating)
+        k = 1600.0 / math.log(2)
+        for cid, irs in groups.items():
+            if irs:
+                s = sum(math.exp(-ir / k) for ir in irs)
+                out[cid] = int(round(k * math.log(len(irs) / s)))
+        return out
+
+    def _sector_times(self, c: int, lap_n: int, bounds) -> list:
+        ts = [self.time_at(c, lap_n + b) for b in bounds]
+        return [ts[i + 1] - ts[i] if math.isfinite(ts[i]) and math.isfinite(ts[i + 1]) else None
+                for i in range(len(ts) - 1)]
+
+    def _battle(self, me: int, relative, sectors) -> list:
+        """Sektorių palyginimas su artimiausiomis tos pačios klasės mašinomis priekyje ir už."""
+        if me < 0 or not self.known[me] or not np.isfinite(self.obs_prog[me]):
+            return []
+        bounds = list(sectors) + [1.0]
+        me_row = next((r for r in relative if r.is_me), None)
+        if me_row is None:
+            return []
+        out = []
+        for side in (1, -1):
+            cands = [r for r in relative if not r.is_me and r.lap_rel == 0 and (r.gap > 0) == (side > 0)
+                     and r.car.class_id == me_row.car.class_id]
+            if not cands:
+                continue
+            rr = min(cands, key=lambda r: abs(r.gap))
+            c = rr.idx
+            my_lap = int(math.floor(self.obs_prog[me])) - 1
+            his_lap = int(math.floor(self.obs_prog[c])) - 1
+            mine = self._sector_times(me, my_lap, bounds)
+            his = self._sector_times(c, his_lap, bounds)
+            diff = [(a - b) if a is not None and b is not None else None for a, b in zip(mine, his)]
+            out.append({"side": "ahead" if side > 0 else "behind", "idx": c, "number": rr.car.number,
+                        "name": rr.car.name, "abbrev": rr.car.abbrev, "gap": rr.gap, "mine": mine,
+                        "his": his, "diff": diff})
+        return out
 
     # ------------------------------------------------------------------
     def _drivers(self, m):

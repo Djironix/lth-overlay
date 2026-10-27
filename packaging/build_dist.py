@@ -35,11 +35,11 @@ PACKAGES = ["PySide6-Essentials==6.12.0", "numpy", "pyyaml"]
 PRUNE_GLOBS = [
     "PySide6/Qt6Qml*", "PySide6/Qt6Quick*", "PySide6/Qt6Pdf*", "PySide6/Qt6Designer*", "PySide6/Qt6Help*",
     "PySide6/Qt6Network*", "PySide6/Qt6OpenGL*", "PySide6/Qt6Sql*", "PySide6/Qt6Test*", "PySide6/Qt6Xml*",
-    "PySide6/Qt6Concurrent*", "PySide6/Qt6DBus*", "PySide6/Qt6PrintSupport*", "PySide6/Qt6Svg*",
+    "PySide6/Qt6Concurrent*", "PySide6/Qt6DBus*", "PySide6/Qt6PrintSupport*", "PySide6/Qt6SvgWidgets*",
     "PySide6/Qt6UiTools*", "PySide6/Qt6VirtualKeyboard*", "PySide6/Qt6ShaderTools*", "PySide6/Qt6Labs*",
     "PySide6/QtQml*", "PySide6/QtQuick*", "PySide6/QtPdf*", "PySide6/QtDesigner*", "PySide6/QtHelp*",
     "PySide6/QtNetwork*", "PySide6/QtOpenGL*", "PySide6/QtSql*", "PySide6/QtTest*", "PySide6/QtXml*",
-    "PySide6/QtConcurrent*", "PySide6/QtDBus*", "PySide6/QtPrintSupport*", "PySide6/QtSvg*", "PySide6/QtUiTools*",
+    "PySide6/QtConcurrent*", "PySide6/QtDBus*", "PySide6/QtPrintSupport*", "PySide6/QtSvgWidgets*", "PySide6/QtUiTools*",
     "PySide6/opengl32sw.dll", "PySide6/translations", "PySide6/qml", "PySide6/resources", "PySide6/metatypes",
     "PySide6/typesystems", "PySide6/include", "PySide6/glue", "PySide6/scripts", "PySide6/examples",
     "PySide6/*.exe", "PySide6/plugins/qmltooling", "PySide6/plugins/sqldrivers", "PySide6/plugins/networkinformation",

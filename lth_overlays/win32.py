@@ -110,7 +110,49 @@ def hotkey_from_msg(message) -> int | None:
         return None
     if msg.message == WM_HOTKEY:
         return int(msg.wParam)
+    if _SHOW_MSG and msg.message == _SHOW_MSG:
+        return SHOW_REQUEST
     return None
+
+
+# ---- antras paleidimas: paprašom jau veikiančios programos atidaryti Control Center ----
+SHOW_REQUEST = -1
+_SHOW_MSG = 0
+if IS_WIN:
+    try:
+        _SHOW_MSG = int(_u32.RegisterWindowMessageW("LTHOverlays.ShowControlCenter"))
+    except (AttributeError, OSError):
+        _SHOW_MSG = 0
+
+
+def request_show_running_instance() -> bool:
+    if not IS_WIN or not _SHOW_MSG:
+        return False
+    HWND_BROADCAST = 0xFFFF
+    return bool(_u32.PostMessageW(HWND_BROADCAST, _SHOW_MSG, 0, 0))
+
+
+def parse_hotkey(text: str):
+    """"Ctrl+Shift+E" -> (modifikatoriai, virtualus klavišas) arba None."""
+    if not text:
+        return None
+    mods, vk = 0, None
+    for part in [x.strip().lower() for x in text.split("+") if x.strip()]:
+        if part in ("ctrl", "control"):
+            mods |= MOD_CONTROL
+        elif part == "shift":
+            mods |= MOD_SHIFT
+        elif part == "alt":
+            mods |= MOD_ALT
+        elif len(part) == 1 and (part.isalpha() or part.isdigit()):
+            vk = ord(part.upper())
+        elif part.startswith("f") and part[1:].isdigit() and 1 <= int(part[1:]) <= 12:
+            vk = 0x6F + int(part[1:])
+        else:
+            return None
+    if vk is None or not mods:
+        return None
+    return mods, vk
 
 
 def single_instance(name: str):
@@ -124,37 +166,71 @@ def single_instance(name: str):
     return h
 
 
-# ---- paleidimas kartu su Windows (Startup aplankas, be registro) ----
-def _startup_file() -> str | None:
+# ---- paleidimas kartu su Windows ----
+# Standartinis HKCU\...\Run įrašas (taip daro Discord, Steam, OneDrive). Anksčiau rašėm
+# .vbs į Startup aplanką - antivirusai tokius skriptus dažnai laiko įtartinais, todėl
+# senas failas ištrinamas (migracija).
+RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
+RUN_VALUE = "LTH Overlays"
+
+
+def _legacy_startup_file() -> str | None:
     base = os.environ.get("APPDATA")
     if not IS_WIN or not base:
         return None
     return os.path.join(base, "Microsoft", "Windows", "Start Menu", "Programs", "Startup", "LTH Overlays.vbs")
 
 
-def autostart_enabled() -> bool:
-    p = _startup_file()
-    return bool(p and os.path.exists(p))
-
-
-def set_autostart(enabled: bool, exe: str) -> bool:
-    """Įrašo/ištrina mažą .vbs Startup aplanke. Programa pati laukia iRacing."""
-    p = _startup_file()
-    if not p:
-        return False
-    try:
-        if enabled:
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            folder = os.path.dirname(exe)
-            with open(p, "w", encoding="utf-8") as f:
-                f.write('Set sh = CreateObject("WScript.Shell")\r\n'
-                        f'sh.CurrentDirectory = "{folder}"\r\n'
-                        f'sh.Run Chr(34) & "{exe}" & Chr(34), 0, False\r\n')
-        elif os.path.exists(p):
+def _remove_legacy() -> bool:
+    """Ištrina seną .vbs. Grąžina True, jei jis buvo (t. y. autostart buvo įjungtas)."""
+    p = _legacy_startup_file()
+    if p and os.path.exists(p):
+        try:
             os.remove(p)
+        except OSError:
+            pass
+        return True
+    return False
+
+
+def autostart_enabled() -> bool:
+    if not IS_WIN:
+        return False
+    import winreg
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, RUN_KEY) as k:
+            winreg.QueryValueEx(k, RUN_VALUE)
+            return True
+    except OSError:
+        return False
+
+
+def set_autostart(enabled: bool, exe: str | None) -> bool:
+    """Įjungia / išjungia paleidimą kartu su Windows. Programa pati laukia iRacing."""
+    if not IS_WIN:
+        return False
+    import winreg
+    _remove_legacy()
+    try:
+        with winreg.CreateKeyEx(winreg.HKEY_CURRENT_USER, RUN_KEY, 0, winreg.KEY_SET_VALUE) as k:
+            if enabled:
+                if not exe:
+                    return False
+                winreg.SetValueEx(k, RUN_VALUE, 0, winreg.REG_SZ, f'"{exe}" --autostart')
+            else:
+                try:
+                    winreg.DeleteValue(k, RUN_VALUE)
+                except FileNotFoundError:
+                    pass
         return True
     except OSError:
         return False
+
+
+def migrate_autostart(exe: str | None) -> None:
+    """Senas .vbs -> registro įrašas (tik jei vartotojas jį buvo įsijungęs)."""
+    if _remove_legacy() and exe:
+        set_autostart(True, exe)
 
 
 # ---- našumo matavimas (be psutil) ----

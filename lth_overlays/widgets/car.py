@@ -1,0 +1,426 @@
+"""Mašinos valdikliai: Fuel, Dash, Inputs, G-force, Tyres, Car settings, Engine warnings."""
+from __future__ import annotations
+
+import math
+
+import numpy as np
+from PySide6.QtCore import QPointF, QRectF, Qt
+from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen
+
+from .panel import PanelWidget
+
+L_TO_GAL = 0.264172
+
+
+class FuelWidget(PanelWidget):
+    NAME = "fuel"
+    TITLE = "Fuel"
+    MIN_WIDTH = 190
+
+    def content_key(self, snap):
+        p = snap.player
+        if p is None or not p.valid or not math.isfinite(p.fuel_l):
+            self._view = None
+            return None
+        gal = self.cfg.get("unit", "l") == "gal"
+        k, u = (L_TO_GAL, " gal") if gal else (1.0, " l")
+        margin = float(self.cfg.get("margin", 0.5) or 0.0)
+        lines = []
+        if p.fuel_per_lap:
+            last = f"   (last {p.fuel_last_lap * k:.2f})" if p.fuel_last_lap else ""
+            lines.append(("Per lap", f"{p.fuel_per_lap * k:.2f}{u}{last}", "text"))
+            lines.append(("Laps of fuel", f"{p.fuel_laps_left:.1f}", "text"))
+            if p.fuel_to_finish is not None:
+                need = p.fuel_to_finish + margin * p.fuel_per_lap
+                add = need - p.fuel_l
+                lines.append(("To finish", f"{need * k:.1f}{u}   ({p.race_laps_left:.1f} laps)", "text"))
+                if add <= 0:
+                    lines.append(("Add at stop", "Enough to finish", "good"))
+                else:
+                    stops = ""
+                    if p.fuel_max_l and add > p.fuel_max_l:
+                        stops = f"   ({math.ceil(add / p.fuel_max_l)} stops)"
+                    lines.append(("Add at stop", f"+{add * k:.1f}{u}{stops}", "yellow"))
+        else:
+            lines.append(("Per lap", "measuring - drive a clean lap", "dim"))
+        pct = p.fuel_pct if math.isfinite(p.fuel_pct) else (p.fuel_l / p.fuel_max_l if p.fuel_max_l else math.nan)
+        self._view = (f"{p.fuel_l * k:.1f}{u}", round(pct, 3) if math.isfinite(pct) else None, tuple(lines))
+        return (self._view, self.width())
+
+    def desired_height(self) -> int:
+        n = len(self._view[2]) if self._view else 1
+        return self.body_height(n + 1.5)
+
+    def paint_content(self, p: QPainter):
+        if self._view is None:
+            if self.editing:
+                self.card(p, "FUEL")
+            return
+        level, pct, lines = self._view
+        y = self.card(p, "FUEL")
+        x0 = self.pad() * 1.4
+        w = self.width() - 2 * x0
+        lh = self.lh()
+        p.setPen(self.pal.text)
+        self.draw_text(p, QRectF(x0, y, w * 0.45, lh * 1.2), level, "mid")
+        if pct is not None:
+            col = self.pal.bad if pct < 0.1 else self.pal.yellow if pct < 0.25 else self.pal.good
+            self.bar(p, QRectF(x0 + w * 0.5, y + lh * 0.45, w * 0.5, lh * 0.3), pct, col)
+        y += lh * 1.5
+        for label, value, col in lines:
+            y = self.kv(p, y, label, value, col)
+
+
+class DashWidget(PanelWidget):
+    NAME = "dash"
+    TITLE = "Dash"
+    HAS_HEADER = False
+    MIN_WIDTH = 180
+
+    def __init__(self, ctx):
+        self._rpm_max = 0.0
+        super().__init__(ctx)
+
+    def content_key(self, snap):
+        p = snap.player
+        if p is None or not p.valid:
+            self._view = None
+            return None
+        self._rpm_max = max(self._rpm_max * 0.9995, p.rpm, 6000.0)
+        mph = self.cfg.get("unit", "kmh") == "mph"
+        spd = p.speed * (2.23694 if mph else 3.6)
+        frac = p.rpm / self._rpm_max if self._rpm_max else 0.0
+        shift = frac >= float(self.cfg.get("shift_pct", 0.94))
+        gear = "R" if p.gear < 0 else "N" if p.gear == 0 else str(p.gear)
+        self._view = (gear, f"{spd:.0f}", "mph" if mph else "km/h", round(frac, 2), shift, p.limiter)
+        return (self._view, self.width())
+
+    def desired_height(self) -> int:
+        return int(self.fonts.em_base * 4.6)
+
+    def paint_content(self, p: QPainter):
+        if self._view is None:
+            return
+        gear, spd, unit, frac, shift, limiter = self._view
+        r = QRectF(self.rect())
+        pal = self.pal
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(pal.bg)
+        if shift:
+            c = QColor(pal.red)
+            c.setAlpha(150)
+            p.setBrush(c)
+        p.drawRoundedRect(r, pal.radius, pal.radius)
+        pad = self.pad()
+        bar_h = max(6.0, r.height() * 0.16)
+        top = QRectF(pad, pad * 0.3, r.width() - 2 * pad, r.height() - bar_h - pad * 1.6)
+        p.setPen(pal.text)
+        self.draw_text(p, QRectF(top.x(), top.y(), top.width() * 0.35, top.height()), gear, "huge", "c")
+        self.draw_text(p, QRectF(top.x() + top.width() * 0.35, top.y(), top.width() * 0.45, top.height()), spd, "big", "r")
+        p.setPen(pal.dim)
+        self.draw_text(p, QRectF(top.x() + top.width() * 0.82, top.y(), top.width() * 0.18, top.height()), unit, "tiny")
+        bar = QRectF(pad, r.height() - pad - bar_h, r.width() - 2 * pad, bar_h)
+        col = pal.bad if frac > 0.94 else pal.yellow if frac > 0.85 else pal.good
+        self.bar(p, bar, frac, col)
+        if limiter:
+            self.chip(p, QRectF(pad, pad * 0.5, self.text_width("LIMITER", "tiny") + 14, bar_h * 1.6), "LIMITER",
+                      pal.blue, pal.text)
+
+
+class InputsWidget(PanelWidget):
+    NAME = "inputs"
+    TITLE = "Inputs"
+    HAS_HEADER = False
+    HEIGHT_MODE = "free"
+    MIN_WIDTH = 160
+    MIN_HEIGHT = 40
+
+    def content_key(self, snap):
+        p = snap.player
+        if p is None or not p.valid:
+            self._view = None
+            return None
+        n = int(float(self.cfg.get("seconds", 4.0)) * 60)
+        tr = {k: v[-n:] for k, v in (p.inputs or {}).items()}
+        self._view = (tr, round(p.throttle, 2), round(p.brake, 2), round(p.clutch, 2), p.abs_active)
+        # trace keičiasi kiekviename kadre - perpiešiam visada (valdiklis įjungtas tik kai reikia)
+        return (len(tr.get("throttle", ())), p.t, self.width(), self.height())
+
+    def desired_height(self) -> int:
+        return int(self.fonts.em_base * 6)
+
+    def paint_content(self, p: QPainter):
+        if self._view is None:
+            return
+        tr, thr, brk, clu, abs_on = self._view
+        r = QRectF(self.rect())
+        pal = self.pal
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(pal.bg)
+        p.drawRoundedRect(r, pal.radius, pal.radius)
+        pad = self.pad()
+        bars = self.cfg.get("show_bars", True)
+        bw = r.height() * 0.13 if bars else 0
+        nbars = 3 if self.cfg.get("show_clutch") else 2
+        graph = QRectF(pad, pad, r.width() - 2 * pad - (bw * nbars + pad * nbars if bars else 0), r.height() - 2 * pad)
+        p.setPen(QPen(pal.row_alt, 1))
+        for k in (0.25, 0.5, 0.75):
+            yy = graph.bottom() - graph.height() * k
+            p.drawLine(QPointF(graph.left(), yy), QPointF(graph.right(), yy))
+
+        def trace(vals, color, center=False, scale=1.0):
+            if vals is None or len(vals) < 2:
+                return
+            n = len(vals)
+            xs = graph.left() + np.arange(n) * graph.width() / max(1, n - 1)
+            v = np.clip(vals * scale, -1, 1) if center else np.clip(vals, 0, 1)
+            ys = graph.center().y() - v * graph.height() / 2 if center else graph.bottom() - v * graph.height()
+            step = max(1, n // int(max(graph.width(), 1)))
+            path = QPainterPath(QPointF(xs[0], ys[0]))
+            for x, y in zip(xs[::step], ys[::step]):
+                path.lineTo(x, y)
+            p.setPen(QPen(color, max(1.5, self._scale() * 1.8)))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawPath(path)
+
+        if self.cfg.get("show_steering", True):
+            trace(tr.get("steer"), QColor(200, 200, 210, 150), center=True, scale=1 / 2.5)
+        if self.cfg.get("show_clutch"):
+            trace(tr.get("clutch"), pal.blue)
+        trace(tr.get("brake"), pal.yellow if abs_on else pal.bad)
+        trace(tr.get("throttle"), pal.good)
+        if bars:
+            x = graph.right() + pad
+            vals = [(thr, pal.good), (brk, pal.yellow if abs_on else pal.bad)]
+            if nbars == 3:
+                vals.append((clu, pal.blue))
+            for v, col in vals:
+                rect = QRectF(x, graph.top(), bw, graph.height())
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(pal.header)
+                p.drawRoundedRect(rect, 2, 2)
+                h = rect.height() * max(0.0, min(1.0, v))
+                p.setBrush(col)
+                p.drawRoundedRect(QRectF(rect.x(), rect.bottom() - h, bw, h), 2, 2)
+                x += bw + pad
+
+
+class GForceWidget(PanelWidget):
+    NAME = "gforce"
+    TITLE = "G-force"
+    HAS_HEADER = False
+    HEIGHT_MODE = "free"
+    MIN_WIDTH = 80
+    MIN_HEIGHT = 80
+
+    def content_key(self, snap):
+        p = snap.player
+        if p is None or not p.valid:
+            self._view = None
+            return None
+        trail = tuple(p.g_trail) if self.cfg.get("trail", True) else ()
+        self._view = (round(p.lat_g, 2), round(p.long_g, 2), trail)
+        return (self._view[:2], len(trail), p.t, self.width(), self.height())
+
+    def desired_height(self) -> int:
+        return self.width()
+
+    def paint_content(self, p: QPainter):
+        if self._view is None:
+            return
+        lat, lon, trail = self._view
+        r = QRectF(self.rect())
+        pal = self.pal
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(pal.bg)
+        p.drawRoundedRect(r, pal.radius, pal.radius)
+        c = r.center()
+        rad = min(r.width(), r.height()) / 2 - self.pad()
+        mg = float(self.cfg.get("max_g", 3.0) or 3.0)
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        for g in range(1, int(mg) + 1):
+            p.setPen(QPen(pal.row_alt if g < mg else pal.dim, 1))
+            rr = rad * g / mg
+            p.drawEllipse(c, rr, rr)
+        p.setPen(QPen(pal.row_alt, 1))
+        p.drawLine(QPointF(c.x() - rad, c.y()), QPointF(c.x() + rad, c.y()))
+        p.drawLine(QPointF(c.x(), c.y() - rad), QPointF(c.x(), c.y() + rad))
+
+        def pt(la, lo):
+            k = rad / mg
+            return QPointF(c.x() + max(-mg, min(mg, la)) * k, c.y() - max(-mg, min(mg, lo)) * k)
+
+        p.setPen(Qt.PenStyle.NoPen)
+        n = len(trail)
+        for i, (la, lo) in enumerate(trail):
+            col = QColor(pal.accent)
+            col.setAlpha(int(30 + 120 * i / max(1, n)))
+            p.setBrush(col)
+            p.drawEllipse(pt(la, lo), 2.5, 2.5)
+        p.setBrush(pal.accent)
+        p.drawEllipse(pt(lat, lon), max(4.0, rad * 0.08), max(4.0, rad * 0.08))
+        p.setPen(pal.text)
+        tot = math.hypot(lat, lon)
+        self.draw_text(p, QRectF(self.pad(), self.pad() * 0.5, r.width(), self.lh()), f"{tot:.1f} g", "small")
+
+
+def _temp_color(pal, t):
+    if not math.isfinite(t):
+        return pal.header
+    if t < 65:
+        return pal.blue
+    if t < 80:
+        return QColor(90, 200, 230)
+    if t <= 100:
+        return pal.good
+    if t <= 110:
+        return pal.yellow
+    return pal.bad
+
+
+class TyresWidget(PanelWidget):
+    NAME = "tyres"
+    TITLE = "Tyres"
+    MIN_WIDTH = 200
+
+    def content_key(self, snap):
+        p = snap.player
+        if p is None or not p.tyres:
+            self._view = None
+            return None
+        data = []
+        for w in ("LF", "RF", "LR", "RR"):
+            temps, wear, press = p.tyres.get(w, ((math.nan,) * 3, (math.nan,) * 3, math.nan))
+            data.append((w, tuple(round(t, 0) if math.isfinite(t) else math.nan for t in temps),
+                         tuple(round(x * 100) if math.isfinite(x) else -1 for x in wear),
+                         round(press, 0) if math.isfinite(press) else -1))
+        self._view = tuple(data)
+        return (self._view, self.width(), self.cfg.get("show_wear"), self.cfg.get("show_pressure"))
+
+    def desired_height(self) -> int:
+        extra = (1 if self.cfg.get("show_wear", True) else 0) + (1 if self.cfg.get("show_pressure") else 0)
+        return self.body_height(2 * (1.8 + extra * 0.9) + 0.9)
+
+    def paint_content(self, p: QPainter):
+        if self._view is None:
+            if self.editing:
+                self.card(p, "TYRES")
+            return
+        y0 = self.card(p, "TYRES", "updated in pits")
+        pad = self.pad()
+        lh = self.lh()
+        extra = (1 if self.cfg.get("show_wear", True) else 0) + (1 if self.cfg.get("show_pressure") else 0)
+        cell_h = lh * (1.8 + extra * 0.9)
+        cw = (self.width() - pad * 3) / 2
+        for i, (w, temps, wear, press) in enumerate(self._view):
+            col, row = i % 2, i // 2
+            x = pad + col * (cw + pad)
+            y = y0 + row * (cell_h + pad * 0.6)
+            p.setPen(self.pal.dim)
+            self.draw_text(p, QRectF(x, y, cw, lh * 0.8), w, "tiny")
+            sw = cw / 3
+            for k, t in enumerate(temps):
+                rect = QRectF(x + k * sw + 1, y + lh * 0.8, sw - 2, lh)
+                bg = QColor(_temp_color(self.pal, t))
+                bg.setAlpha(170)
+                self.chip(p, rect, "–" if not math.isfinite(t) else f"{t:.0f}°", bg, self.pal.text, "small")
+            yy = y + lh * 1.85
+            if self.cfg.get("show_wear", True):
+                p.setPen(self.pal.dim)
+                txt = "  ".join("–" if x < 0 else f"{x}%" for x in wear)
+                self.draw_text(p, QRectF(x, yy, cw, lh * 0.8), txt, "tiny", "c")
+                yy += lh * 0.9
+            if self.cfg.get("show_pressure"):
+                p.setPen(self.pal.dim)
+                self.draw_text(p, QRectF(x, yy, cw, lh * 0.8), "–" if press < 0 else f"{press:.0f} kPa", "tiny", "c")
+
+
+class CarSettingsWidget(PanelWidget):
+    NAME = "car_settings"
+    TITLE = "Car setting changes"
+    HAS_HEADER = False
+
+    def content_key(self, snap):
+        p = snap.player
+        hold = float(self.cfg.get("hold", 3.0))
+        ev = [] if p is None else [e for e in p.dc_events if e[3] < hold]
+        # vienas įrašas kiekvienam nustatymui (paskutinis)
+        last = {}
+        for name, old, new, age in ev:
+            first_old = last[name][0] if name in last else old
+            last[name] = (first_old, new)
+        self._view = tuple((k, v[0], v[1]) for k, v in last.items())[-3:]
+        return (self._view, self.width())
+
+    def desired_height(self) -> int:
+        return self.body_height(max(1, len(self._view or ())) * 1.2)
+
+    def paint_content(self, p: QPainter):
+        rows = self._view or ()
+        if not rows:
+            if not self.editing:
+                return
+            rows = (("Brake bias", "54.2", "53.8"),)
+        self.card(p)
+        lh = self.lh() * 1.2
+        y = self.pad() * 0.7
+        x0 = self.pad() * 1.4
+        w = self.width() - 2 * x0
+        for name, old, new in rows:
+            p.setPen(self.pal.dim)
+            self.draw_text(p, QRectF(x0, y, w * 0.5, lh), name.upper(), "tiny")
+            p.setPen(self.pal.dim)
+            self.draw_text(p, QRectF(x0, y, w * 0.72, lh), f"{old}  →", "small", "r")
+            p.setPen(self.pal.accent)
+            self.draw_text(p, QRectF(x0, y, w, lh), new, "mid", "r")
+            y += lh
+
+
+class EngineWarningsWidget(PanelWidget):
+    NAME = "engine_warn"
+    TITLE = "Engine warnings"
+    HAS_HEADER = False
+
+    def content_key(self, snap):
+        p = snap.player
+        if p is None or not p.valid:
+            self._view = None
+            return None
+        temps = ""
+        if self.cfg.get("always"):
+            parts = []
+            if math.isfinite(p.water_temp):
+                parts.append(f"Water {p.water_temp:.0f}°")
+            if math.isfinite(p.oil_temp):
+                parts.append(f"Oil {p.oil_temp:.0f}°")
+            if math.isfinite(p.oil_press):
+                parts.append(f"Oil {p.oil_press:.1f} bar")
+            temps = "   ".join(parts)
+        self._view = (tuple(p.warnings), temps)
+        return (self._view, self.width())
+
+    def desired_height(self) -> int:
+        n = len(self._view[0]) if self._view else 0
+        return self.body_height(max(1, n + (1 if self._view and self._view[1] else 0)) * 1.1)
+
+    def paint_content(self, p: QPainter):
+        warns, temps = self._view if self._view else ((), "")
+        if not warns and not temps:
+            if not self.editing:
+                return
+            temps = "Shows only when something is wrong"
+        r = QRectF(self.rect())
+        p.setPen(Qt.PenStyle.NoPen)
+        if warns:
+            c = QColor(self.pal.bad)
+            c.setAlpha(210)
+            p.setBrush(c)
+        else:
+            p.setBrush(self.pal.bg)
+        p.drawRoundedRect(r, self.pal.radius, self.pal.radius)
+        y = self.pad() * 0.7
+        lh = self.lh() * 1.1
+        for wtxt in warns:
+            y = self.text_line(p, y, "⚠  " + wtxt.upper(), "text", "bold")
+        if temps:
+            self.text_line(p, y, temps, "text" if warns else "dim", "small")

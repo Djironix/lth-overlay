@@ -17,7 +17,7 @@ import time
 
 import numpy as np
 
-from .frame import ALL_VARS, MAX_CARS, Frame
+from .frame import ALL_VARS, DC_PREFIX, MAX_CARS, Frame
 from .sessioninfo import build_model, parse_yaml
 
 MEMMAP_NAME = "Local\\IRSDKMemMapFileName"
@@ -133,18 +133,23 @@ class LiveSource:
     def _build_layout(self, num_vars: int, var_offset: int, buf_len: int):
         self._buf = np.zeros(buf_len, dtype=np.uint8)
         self._views = {}
+        self._dc_names = []
         wanted = {name: dt for name, dt in ALL_VARS}
         for i in range(num_vars):
             vtype, off, count, _, name, _, _ = _VARHDR.unpack_from(self._mm, var_offset + i * _VARHDR.size)
             name = name.split(b"\0", 1)[0].decode("latin-1")
-            if name not in wanted:
+            # "dc*" (stabdžių balansas, TC, ABS...) - kiekviena mašina turi savo, imame visus skaliarus
+            is_dc = name.startswith(DC_PREFIX) and count == 1
+            if name not in wanted and not is_dc:
                 continue
             dt = _NP_TYPES.get(vtype)
             if dt is None:
                 continue
             view = np.frombuffer(self._buf, dtype=dt, count=count, offset=off)
-            self._views[name] = view if count > 1 else view  # skaliarai paimami [0]
-        self._scalar = {n for n, _ in ALL_VARS if n in self._views and not n.startswith("CarIdx")}
+            self._views[name] = view  # skaliarai paimami [0]
+            if is_dc:
+                self._dc_names.append(name)
+        self._scalar = {n for n in self._views if not n.startswith("CarIdx")}
 
     # ---- kadrai ----
     def wait_frame(self, timeout_ms: int = 100, min_interval_s: float = 0.0):
@@ -182,7 +187,7 @@ class LiveSource:
             raw = bytes(mm[si_off:si_off + si_len])
             self._parsing = True
             threading.Thread(target=self._parse_session, args=(raw, si_update), daemon=True).start()
-        values = {}
+        values = {"_dc": self._dc_names}
         for name, view in self._views.items():
             values[name] = view[0].item() if name in self._scalar else fit_car_array(name, view.copy())
         self._last_return = time.perf_counter()

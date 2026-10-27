@@ -15,6 +15,7 @@ class StandingsWidget(TableWidget):
     NAME = "standings"
     TITLE = "Standings"
     MIN_WIDTH = 220
+    HEIGHT_MODE = "rows"
     WIDTHS = {"classbar": 0.01, "pos": 1.7, "change": 1.0, "number": 2.4, "brand": 2.5, "name": None,
               "gap": 3.6, "interval": 3.6, "last": 4.2, "best": 4.2, "start": 2.0, "irating": 2.8,
               "license": 3.0, "pit": 2.6, "tire": 1.3}
@@ -72,8 +73,7 @@ class StandingsWidget(TableWidget):
         me = next((r for r in cars if r.is_me), None)
         multiclass = snap.multiclass
         class_mode = c.get("class_mode", "grouped") if multiclass else "overall"
-        out = []
-        max_rows = int(c.get("max_rows", 20))
+        out, meta = [], []  # meta: (rūšis, klasė, ar mano klasė, ar aš)
         if class_mode == "grouped":
             order = []
             for r in cars:
@@ -83,33 +83,86 @@ class StandingsWidget(TableWidget):
             if me and me.class_id in order:
                 order.remove(me.class_id)
                 order.insert(0, me.class_id)
+            other_n = int(c.get("other_classes_n", 3))
             for cid in order:
                 rows = [r for r in cars if r.class_id == cid]
                 mine = me is not None and me.class_id == cid
                 if mine:
-                    sel, idx = self._select(snap, rows)
-                elif c.get("filter", "top_around") == "all":
-                    sel, idx = rows, list(range(len(rows)))
-                else:
-                    n = int(c.get("top_n", 3))
-                    sel, idx = rows[:n], list(range(min(n, len(rows))))
+                    sel, idx = self._select(snap, rows)  # mano klasė: pasirinktas filtras
+                elif other_n <= 0:
+                    continue  # kitos klasės paslėptos
+                else:  # kitos klasės: tik top N
+                    sel, idx = rows[:other_n], list(range(min(other_n, len(rows))))
                 info = snap.classes.get(cid, {})
                 out.append(("class", (info.get("name") or rows[0].class_name, ("rgb", info.get("color", 0xFFFFFF)),
                                       f"{len(rows)} car{'s' if len(rows) != 1 else ''}"), ()))
-                self._append(out, sel, idx, cols, snap, by_class=True)
+                meta.append(("class", cid, mine, False))
+                self._append(out, sel, idx, cols, snap, by_class=True, meta=meta, cid=cid, mine=mine)
         else:
             rows = [r for r in cars if me is None or class_mode == "overall" or r.class_id == me.class_id]
             sel, idx = self._select(snap, rows)
-            self._append(out, sel, idx, cols, snap, by_class=multiclass and class_mode == "mine")
-        return out[: max_rows + 8]
+            self._append(out, sel, idx, cols, snap, by_class=multiclass and class_mode == "mine", meta=meta,
+                         cid=None, mine=True)
+        return self._fit(out, meta)
 
-    def _append(self, out, sel, idx, cols, snap, by_class):
+    @staticmethod
+    def _cleanup(out, meta):
+        """Pašalina tuščias klasių antraštes ir skirtukus kraštuose."""
+        k = 0
+        while k < len(meta):
+            kind = meta[k][0]
+            nxt = meta[k + 1][0] if k + 1 < len(meta) else None
+            prv = meta[k - 1][0] if k > 0 else None
+            if (kind == "class" and nxt in (None, "class")) or (kind == "sep" and (nxt in (None, "class", "sep") or prv in (None, "class"))):
+                del out[k], meta[k]
+                k = max(0, k - 1)
+                continue
+            k += 1
+
+    def _row_units(self, kind) -> float:
+        return 0.6 if kind == "sep" else 0.9 if kind == "class" else 1.0
+
+    def _fit(self, out, meta):
+        """Apriboja eilutes: pagal vartotojo nustatytą aukštį arba „Max rows“.
+        Pirmiausia trumpinamos kitos klasės (nuo galo), mano eilutė lieka visada."""
+        avail = self.avail_body_height()
+        if avail is not None:
+            budget = avail / self.row_h()
+        else:
+            budget = int(self.cfg.get("max_rows", 26)) + sum(1 for m in meta if m[0] != "car") * 0.9
+        out, meta = list(out), list(meta)
+
+        def total():
+            return sum(self._row_units(m[0]) for m in meta)
+
+        # 1) kitų klasių eilutės nuo galo
+        while total() > budget + 1e-6:
+            k = next((k for k in range(len(meta) - 1, -1, -1) if not meta[k][2] and meta[k][0] != "class"), None)
+            if k is None:
+                break
+            del out[k], meta[k]
+            self._cleanup(out, meta)
+        # 2) mano klasė: tolimiausios nuo manęs eilutės
+        while total() > budget + 1e-6:
+            me_i = next((k for k, m in enumerate(meta) if m[3]), None)
+            cand = [k for k, m in enumerate(meta) if m[0] == "car" and not m[3]]
+            if not cand:
+                break
+            k = max(cand, key=lambda k: (abs(k - me_i) if me_i is not None else k, k))
+            del out[k], meta[k]
+            self._cleanup(out, meta)
+        self._meta = meta
+        return out
+
+    def _append(self, out, sel, idx, cols, snap, by_class, meta, cid, mine):
         prev = None
         for r, i in zip(sel, idx or range(len(sel))):
             if prev is not None and i != prev + 1:
                 out.append(("sep", (), ()))
+                meta.append(("sep", cid, mine, False))
             prev = i
             out.append(self._row(r, cols, snap, by_class))
+            meta.append(("car", cid, mine, bool(r.is_me)))
 
     def _row(self, r, cols, snap, by_class):
         c = self.cfg
@@ -174,11 +227,8 @@ class StandingsWidget(TableWidget):
     # ---------------- piešimas ----------------
     def desired_height(self) -> int:
         rh = self.row_h()
-        h = 0.0
-        for kind, _, _ in self._rows:
-            h += rh * (0.6 if kind == "sep" else 0.9 if kind == "class" else 1.0)
-        head = round(self.fonts.em_small * 1.9) + 2 if self.cfg.get("show_header", True) else 4
-        return int(head + h + 6)
+        h = sum(rh * self._row_units(kind) for kind, _, _ in self._rows)
+        return int(self.header_h() + h + 6)
 
     def paint_content(self, p):
         if not self._rows and not self.editing:
