@@ -159,6 +159,7 @@ class PlayerState:
     pace_row: int = -1
     pace_line: int = -1
     tyre_compound: int = -1  # iRacing CarIdxTireCompound: 0 = sausos, 1 = lietaus (-1 = nežinoma)
+    brake_bias: float | None = None  # dcBrakeBias (jei mašina turi)
 
 
 class PlayerTracker:
@@ -426,6 +427,8 @@ class PlayerTracker:
         s.flag_bits = bits
         s.flags = tuple((key, text) for bit, key, text in FLAG_BITS if bits & bit)
         # kita
+        bb = f.values.get("dcBrakeBias")
+        s.brake_bias = float(bb) if bb is not None else None
         tc = f.CarIdxTireCompound
         if tc is not None and pl_ok(f, tc):
             s.tyre_compound = int(tc[f.PlayerCarIdx])

@@ -68,6 +68,7 @@ class PanelWidget(OverlayWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(self.pal.bg)
         p.drawRoundedRect(r, self.pal.radius, self.pal.radius)
+        self._drew_bg = True
         if self.HAS_HEADER and self.cfg.get("show_header", True) and title:
             return self.paint_header(p, title, right) + self.pad() * 0.4
         return self.pad() * 0.7

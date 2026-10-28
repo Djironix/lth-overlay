@@ -127,6 +127,7 @@ class DashWidget(PanelWidget):
             c.setAlpha(150)
             p.setBrush(c)
         p.drawRoundedRect(r, pal.radius, pal.radius)
+        self._drew_bg = True
         pad = self.pad()
         bar_h = max(6.0, r.height() * 0.16)
         top = QRectF(pad, pad * 0.3, r.width() - 2 * pad, r.height() - bar_h - pad * 1.6)
@@ -166,7 +167,8 @@ class InputsWidget(PanelWidget):
             return None
         n = int(float(self.cfg.get("seconds", 4.0)) * 60)
         tr = {k: v[-n:] for k, v in (p.inputs or {}).items()}
-        self._view = (tr, round(p.throttle, 2), round(p.brake, 2), round(p.clutch, 2), p.abs_active)
+        self._view = (tr, round(p.throttle, 2), round(p.brake, 2), round(p.clutch, 2), p.abs_active,
+                      p.speed, p.gear, p.steer)
         return (len(tr.get("throttle", ())), p.t, self.width(), self.height())
 
     def fast_tick(self, timing) -> bool:
@@ -179,7 +181,9 @@ class InputsWidget(PanelWidget):
         if arr is None:
             return False
         tr = dict(zip(self.KEYS, arr))
-        self._view = (tr, float(arr[0, -1]), float(arr[1, -1]), float(arr[2, -1]), bool(arr[4, -1] > 0.5))
+        f = timing.frame
+        self._view = (tr, float(arr[0, -1]), float(arr[1, -1]), float(arr[2, -1]), bool(arr[4, -1] > 0.5),
+                      float(f.get("Speed", 0.0) or 0.0), int(f.get("Gear", 0) or 0), float(arr[3, -1]))
         return True
 
     def desired_height(self) -> int:
@@ -188,16 +192,25 @@ class InputsWidget(PanelWidget):
     def paint_content(self, p: QPainter):
         if self._view is None:
             return
-        tr, thr, brk, clu, abs_on = self._view
+        tr, thr, brk, clu, abs_on, speed, gear, steer = self._view
         r = QRectF(self.rect())
         pal = self.pal
         pad = self.pad()
-        bars = self.cfg.get("show_bars", True)
+        c = self.cfg
+        bars = c.get("show_bars", True)
+        pct = bars and c.get("show_percent", True)
+        wheel = c.get("show_wheel", True)
         bw = r.height() * 0.13 if bars else 0
-        nbars = 3 if self.cfg.get("show_clutch") else 2
-        graph = QRectF(pad, pad, r.width() - 2 * pad - (bw * nbars + pad * nbars if bars else 0), r.height() - 2 * pad)
+        if pct:
+            bw = max(bw, self.text_width("100", "tiny") + 2)
+        nbars = 3 if c.get("show_clutch") else 2
+        wsz = (r.height() - 2 * pad) if wheel else 0
+        right = (bw * nbars + pad * nbars if bars else 0) + (wsz + pad if wheel else 0)
+        lab_h = self.lh() * 0.75 if pct else 0
+        graph = QRectF(pad, pad, max(10.0, r.width() - 2 * pad - right), r.height() - 2 * pad)
+        bar_top = graph.top() + lab_h
         # fonas, tinklelis ir juostų pagrindai nesikeičia - paruošiami vieną kartą
-        bkey = (self.width(), self.height(), bars, nbars, id(pal), self.devicePixelRatioF())
+        bkey = (self.width(), self.height(), bars, nbars, pct, wheel, id(pal), self.devicePixelRatioF())
         if getattr(self, "_bg_key", None) != bkey:
             from PySide6.QtGui import QPixmap
             dpr = self.devicePixelRatioF()
@@ -218,11 +231,12 @@ class InputsWidget(PanelWidget):
                 q.setPen(Qt.PenStyle.NoPen)
                 q.setBrush(pal.track)
                 for _ in range(nbars):
-                    q.drawRoundedRect(QRectF(x, graph.top(), bw, graph.height()), 2, 2)
+                    q.drawRoundedRect(QRectF(x, bar_top, bw, graph.bottom() - bar_top), 2, 2)
                     x += bw + pad
             q.end()
             self._bg_pm, self._bg_key = pm, bkey
         p.drawPixmap(0, 0, self._bg_pm)
+        self._drew_bg = True
 
         pen_w = max(1.5, self._scale() * 1.8)
 
@@ -254,11 +268,57 @@ class InputsWidget(PanelWidget):
             if nbars == 3:
                 vals.append((clu, pal.blue))
             p.setPen(Qt.PenStyle.NoPen)
+            bh = graph.bottom() - bar_top
             for v, col in vals:
-                h = graph.height() * max(0.0, min(1.0, v))
+                h = bh * max(0.0, min(1.0, v))
                 if h > 0.5:
                     p.fillRect(QRectF(x, graph.bottom() - h, bw, h), col)
+                if pct:
+                    p.setPen(col)
+                    self.draw_text(p, QRectF(x - 4, graph.top(), bw + 8, lab_h), f"{v * 100:.0f}", "tiny", "c")
+                    p.setPen(Qt.PenStyle.NoPen)
                 x += bw + pad
+        if wheel:
+            self._paint_wheel(p, QRectF(r.width() - pad - wsz, pad, wsz, wsz), steer, gear, speed)
+
+    def _paint_wheel(self, p: QPainter, rect: QRectF, steer: float, gear: int, speed: float):
+        """Vairas: sukasi kartu su tavo vairu (SteeringWheelAngle, rad), centre - pavara ir greitis."""
+        import math
+        pal = self.pal
+        c = rect.center()
+        rad = rect.width() / 2 - 2
+        ring = max(3.0, rad * 0.16)
+        rim = QColor(pal.text)
+        rim.setAlpha(70)
+        p.setPen(QPen(rim, ring))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(c, rad - ring / 2, rad - ring / 2)
+        # viršaus žymė (12 valanda) pasukta pagal vairą; iRacing: teigiamas = į kairę
+        a = -steer
+        p.setPen(QPen(pal.accent, ring + 0.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
+        span = 26  # laipsniais
+        start = 90 - math.degrees(a) - span / 2
+        p.drawArc(QRectF(c.x() - rad + ring / 2, c.y() - rad + ring / 2, 2 * rad - ring, 2 * rad - ring),
+                  int(start * 16), int(span * 16))
+        # stipinai
+        sp = QColor(pal.text)
+        sp.setAlpha(55)
+        p.setPen(QPen(sp, max(1.5, ring * 0.45)))
+        for base in (180, 0, 270):
+            ang = math.radians(base) + a
+            x1, y1 = c.x() + math.cos(ang) * rad * 0.42, c.y() - math.sin(ang) * rad * 0.42
+            x2, y2 = c.x() + math.cos(ang) * (rad - ring), c.y() - math.sin(ang) * (rad - ring)
+            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+        g = "R" if gear < 0 else "N" if gear == 0 else str(gear)
+        mph = self.cfg.get("unit", "kmh") == "mph"
+        spd = f"{speed * (2.23694 if mph else 3.6):.0f}"
+        p.setPen(pal.text)
+        if self.cfg.get("show_speed", True):
+            self.draw_text(p, QRectF(c.x() - rad, c.y() - rad * 0.62, 2 * rad, rad * 0.9), g, "big", "c")
+            p.setPen(pal.dim)
+            self.draw_text(p, QRectF(c.x() - rad, c.y() + rad * 0.12, 2 * rad, rad * 0.5), spd, "small", "c")
+        else:
+            self.draw_text(p, QRectF(c.x() - rad, c.y() - rad * 0.5, 2 * rad, rad), g, "big", "c")
 
 
 class GForceWidget(PanelWidget):
@@ -290,6 +350,7 @@ class GForceWidget(PanelWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(pal.bg)
         p.drawRoundedRect(r, pal.radius, pal.radius)
+        self._drew_bg = True
         c = r.center()
         rad = min(r.width(), r.height()) / 2 - self.pad()
         mg = float(self.cfg.get("max_g", 3.0) or 3.0)
@@ -474,6 +535,7 @@ class EngineWarningsWidget(PanelWidget):
         else:
             p.setBrush(self.pal.bg)
         p.drawRoundedRect(r, self.pal.radius, self.pal.radius)
+        self._drew_bg = True
         y = self.pad() * 0.7
         lh = self.lh() * 1.1
         for wtxt in warns:

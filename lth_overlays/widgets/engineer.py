@@ -38,6 +38,7 @@ class EngineerWidget(OverlayWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(self.pal.bg)
         p.drawRoundedRect(r, 6, 6)
+        self._drew_bg = True
         p.fillRect(QRectF(0, 0, 5, r.height()), getattr(self.pal, PRIO_COLOR.get(prio, "accent")))
         p.setPen(self.pal.accent)
         self.draw_text(p, QRectF(16, 0, 80, r.height()), "ENG", "tiny")
@@ -74,6 +75,7 @@ class PerfWidget(OverlayWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(self.pal.bg)
         p.drawRoundedRect(r, 6, 6)
+        self._drew_bg = True
         lh = self.fonts.em_small * 1.3
         y = (r.height() - lh * len(self._lines)) / 2
         p.setPen(self.pal.text)

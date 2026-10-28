@@ -59,6 +59,7 @@ class DeltaBarWidget(PanelWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(pal.bg)
         p.drawRoundedRect(r, pal.radius, pal.radius)
+        self._drew_bg = True
         pad = self.pad()
         bar_h = max(6.0, r.height() * 0.22)
         bar = QRectF(pad, r.height() - pad - bar_h, r.width() - 2 * pad, bar_h)

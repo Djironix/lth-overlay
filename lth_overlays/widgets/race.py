@@ -102,6 +102,7 @@ class FlagsWidget(PanelWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(QColor(*bg))
         p.drawRoundedRect(r, rad, rad)
+        self._drew_bg = True
         if key == "checkered":
             s = r.height() / 3
             for i in range(int(r.width() / s) + 1):
@@ -168,6 +169,7 @@ class RadarWidget(PanelWidget):
         bg = QColor(pal.bg)
         p.setBrush(bg)
         p.drawRoundedRect(r, pal.radius * 2, pal.radius * 2)
+        self._drew_bg = pal.radius * 2
         cx, cy = r.center().x(), r.center().y()
         k = (r.height() / 2 - 6) / (rng + CAR_LEN_M / 2)  # px per metrą
         cw = max(8.0, min(r.width() * 0.16, 2.0 * k))
@@ -358,7 +360,7 @@ class IncidentsWidget(PanelWidget):
         if p is None or not p.valid:
             self._view = None
             return None
-        limit = int(self.cfg.get("limit", 0) or 0)
+        limit = int(self.cfg.get("limit", 0) or 0) or int(getattr(snap, "incident_limit", 0) or 0)
         popup = float(self.cfg.get("popup", 5.0))
         fresh = p.inc_last_add if p.inc_age < popup and p.inc_last_add > 0 else 0
         team = p.inc_team if p.inc_team and p.inc_team != p.inc_my else None
@@ -549,6 +551,7 @@ class ConnectionWidget(PanelWidget):
         else:
             p.setBrush(self.pal.bg)
         p.drawRoundedRect(r, self.pal.radius, self.pal.radius)
+        self._drew_bg = True
         lh = self.lh() * 1.2
         x0 = self.pad() * 1.2
         w = r.width() - 2 * x0
@@ -569,3 +572,153 @@ class ConnectionWidget(PanelWidget):
         self.draw_text(p, QRectF(tx, y, w - tx, lh), txt, "bold")
         p.setPen(self.pal.text if bad else self.pal.dim)
         self.draw_text(p, QRectF(x0, y, w, lh), lat, "small", "r")
+
+
+# ---------------------------------------------------------------- Pit commands (mygtukai)
+class PitCommandsWidget(PanelWidget):
+    """Mygtukai pit servisui be black box: paspaudi pele, komanda nueina į iRacing."""
+
+    NAME = "pit_commands"
+    TITLE = "Pit commands"
+    MIN_WIDTH = 220
+    INTERACTIVE = True
+    BUTTONS = (("tyres", "All tyres"), ("finish", "Fuel to finish"), ("full", "Full tank"), ("nofuel", "No fuel"),
+               ("fr", "Fast repair"), ("ws", "Windscreen"), ("clear", "Clear all"))
+
+    def __init__(self, ctx):
+        self._hover = None
+        self._flash = None  # (mygtukas, laikas) - trumpas patvirtinimas paspaudus
+        self._state = {}
+        super().__init__(ctx)
+        self.setMouseTracking(True)
+
+    def content_key(self, snap):
+        p = snap.player
+        flags = p.pit_flags if p is not None else 0
+        need = None
+        if p is not None and p.fuel_to_finish is not None and math.isfinite(p.fuel_l):
+            margin = float(self.ctx.config.widget("fuel").get("margin", 0.5) or 0) * (p.fuel_per_lap or 0)
+            need = max(0.0, p.fuel_to_finish + margin - p.fuel_l)
+        self._state = {"flags": flags, "fuel": p.pit_fuel if p is not None else 0.0,
+                       "max": p.fuel_max_l if p is not None else 0.0, "need": need,
+                       "repairs": p.fast_repairs if p is not None else 0}
+        active = {
+            "tyres": flags & 0x0F == 0x0F, "finish": False, "full": False, "nofuel": not flags & 0x10,
+            "fr": bool(flags & 0x40), "ws": bool(flags & 0x20), "clear": False,
+        }
+        sub = f"Fuel +{self._state['fuel']:.1f} l" if flags & 0x10 else "No fuel"
+        if need is not None:
+            sub += f"   ·   to finish {need:.1f} l"
+        self._view = (tuple(sorted(active.items())), sub, self._hover, self._flash[0] if self._flash else None)
+        return (self._view, self.width())
+
+    def desired_height(self) -> int:
+        rows = (len(self.BUTTONS) + 1) // 2
+        return self.body_height(1.2 + rows * 1.55)
+
+    def _rects(self):
+        lh = self.lh()
+        x0 = self.pad()
+        y0 = self.header_h() + self.pad() * 0.4 + lh * 1.2
+        w = (self.width() - 3 * x0) / 2
+        out = {}
+        for i, (key, _) in enumerate(self.BUTTONS):
+            col, row = i % 2, i // 2
+            out[key] = QRectF(x0 + col * (w + x0), y0 + row * lh * 1.55, w, lh * 1.3)
+        return out
+
+    def paint_content(self, p: QPainter):
+        if self._view is None:
+            return
+        active, sub, hover, flash = self._view
+        active = dict(active)
+        y = self.card(p, "PIT COMMANDS", "click to set")
+        p.setPen(self.pal.dim)
+        self.text_line(p, y, sub, "dim", "small")
+        for key, rect in self._rects().items():
+            label = dict(self.BUTTONS)[key]
+            on = active.get(key)
+            bg = QColor(self.pal.accent) if on else QColor(self.pal.track)
+            if key == flash:
+                bg = QColor(self.pal.good)
+            elif key == hover and not on:
+                bg = QColor(self.pal.text)
+                bg.setAlpha(60)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(bg)
+            p.drawRoundedRect(rect, 5, 5)
+            p.setPen(self.pal.ink if (on or key == flash) else self.pal.text)
+            self.draw_text(p, rect, label, "small", "c")
+
+    def _hit(self, pos):
+        for key, rect in self._rects().items():
+            if rect.contains(pos):
+                return key
+        return None
+
+    def mouseMoveEvent(self, e):
+        if self.editing:
+            return super().mouseMoveEvent(e)
+        h = self._hit(e.position())
+        if h != self._hover:
+            self._hover = h
+            self.setCursor(Qt.CursorShape.PointingHandCursor if h else Qt.CursorShape.ArrowCursor)
+            self._refresh()
+
+    def leaveEvent(self, e):
+        super().leaveEvent(e)
+        if self._hover is not None:
+            self._hover = None
+            self._refresh()
+
+    def mousePressEvent(self, e):
+        if self.editing:
+            return super().mousePressEvent(e)
+        if e.button() != Qt.MouseButton.LeftButton:
+            return
+        key = self._hit(e.position())
+        if key is None:
+            return
+        self.send(key)
+        self._flash = (key, 0)
+        self._refresh()
+        from PySide6.QtCore import QTimer
+        QTimer.singleShot(350, self._end_flash)
+
+    def _end_flash(self):
+        self._flash = None
+        self._refresh()
+
+    def _refresh(self):
+        self._key = object()
+        if self._snap is not None:
+            self.push(self._snap, force=True)
+        else:
+            self.update()
+
+    def send(self, key) -> list:
+        """Komandų seka iRacing'ui. Grąžina [(mode, value)] (testams)."""
+        from .. import win32 as w
+        st = self._state
+        flags = st.get("flags", 0)
+        cmds = []
+        if key == "tyres":
+            if flags & 0x0F == 0x0F:
+                cmds = [(w.PIT_CLEAR_TIRES, 0)]
+            else:
+                cmds = [(w.PIT_LF, 0), (w.PIT_RF, 0), (w.PIT_LR, 0), (w.PIT_RR, 0)]
+        elif key == "finish" and st.get("need") is not None:
+            cmds = [(w.PIT_FUEL, int(math.ceil(st["need"])))] if st["need"] > 0 else [(w.PIT_CLEAR_FUEL, 0)]
+        elif key == "full":
+            cmds = [(w.PIT_FUEL, int(math.ceil(st.get("max") or 999)))]
+        elif key == "nofuel":
+            cmds = [(w.PIT_CLEAR_FUEL, 0)]
+        elif key == "fr":
+            cmds = [(w.PIT_CLEAR_FR, 0)] if flags & 0x40 else [(w.PIT_FR, 0)]
+        elif key == "ws":
+            cmds = [(w.PIT_CLEAR_WS, 0)] if flags & 0x20 else [(w.PIT_WS, 0)]
+        elif key == "clear":
+            cmds = [(w.PIT_CLEAR, 0)]
+        for mode, value in cmds:
+            w.pit_command(mode, value)
+        return cmds

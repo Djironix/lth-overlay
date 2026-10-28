@@ -37,7 +37,8 @@ class PreviewRenderer:
         w = self._widget(name)
         cfg = self.ctx.config.widget(name)
         key = (id(snap), snap.t, repr(sorted((k, repr(v)) for k, v in cfg.items())), self.ctx.theme,
-               self.ctx.config.data.get("font"), repr(self.ctx.config.data.get("custom_colors")))
+               self.ctx.config.data.get("font"), repr(self.ctx.config.data.get("custom_colors")),
+               repr(self.ctx.config.data.get("outline")))
         hit = self._cache.get(name)
         if hit is not None and hit[0] == key and not force:
             return hit[1]

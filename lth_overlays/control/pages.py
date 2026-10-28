@@ -851,6 +851,25 @@ class AppearancePage(Page):
         self.theme_grid.setSpacing(12)
         self.theme_card.add(self.theme_grid)
         self.content.addWidget(self.theme_card)
+        # kontūras (stroke) visiems valdikliams
+        from .components import SliderField
+        og = self.ctx.config.data.setdefault("outline", {"width": 1.0, "color": "accent", "opacity": 0.5})
+        self.outline_card = Card("Outline", "A thin border around every widget. Single widgets can override it in "
+                                            "their Look settings.")
+        self.o_width = SliderField(float(og.get("width", 1.0)), 0.0, 6.0, 0.5, " px")
+        self.o_width.changed.connect(lambda v: self._set_outline("width", float(v)))
+        self.outline_card.add(SettingRow("Width", self.o_width, "0 = no outline"))
+        col = og.get("color", "accent")
+        self.o_mode = Segmented({"accent": "Theme accent", "text": "Theme text", "custom": "Custom"},
+                                col if col in ("accent", "text") else "custom")
+        self.o_mode.changed.connect(self._outline_mode)
+        self.o_color = ColorButton(col if str(col).startswith("#") else "#ECBE58")
+        self.o_color.changed.connect(lambda v: (self.o_mode.set_value("custom"), self._set_outline("color", v)))
+        self.outline_card.add(SettingRow("Colour", self._wrap(hbox(self.o_mode, self.o_color))))
+        self.o_opacity = SliderField(float(og.get("opacity", 0.5)), 0.1, 1.0, 0.05, percent=True)
+        self.o_opacity.changed.connect(lambda v: self._set_outline("opacity", float(v)))
+        self.outline_card.add(SettingRow("Opacity", self.o_opacity))
+        self.content.addWidget(self.outline_card)
         self.font_card = Card("Font", "Bundled with the app, nothing is installed on Windows.")
         self.font_rows = QVBoxLayout()
         self.font_rows.setSpacing(8)
@@ -879,6 +898,22 @@ class AppearancePage(Page):
         self._fill_fonts()
         self._fill_colors()
         self._fill_classes()
+
+    @staticmethod
+    def _wrap(layout):
+        w = QWidget()
+        w.setLayout(layout)
+        return w
+
+    def _set_outline(self, key, value):
+        self.ctx.config.data.setdefault("outline", {})[key] = value
+        for w in self.ctx.widgets.values():
+            w.update()
+        self.ctx.save_config_soon()
+        self.center.preview.invalidate()
+
+    def _outline_mode(self, v):
+        self._set_outline("color", self.o_color.value if v == "custom" else v)
 
     def _fill_themes(self):
         clear_layout(self.theme_grid)
@@ -1015,7 +1050,9 @@ class HotkeysPage(Page):
     ACTIONS = (("edit", "Edit layout", "Turn edit mode on or off: drag, resize and right-click widgets."),
                ("toggle_all", "Hide all overlays", "Hide or show every widget at once."),
                ("rain_next", "Rain Master: next tip", "Show the next rain tip for the current conditions. "
-                                                      "Put it on a button box key."))
+                                                      "Put it on a button box key."),
+               ("next_profile", "Next profile", "Switch to the next profile (Race, Qualifying, Practice...). "
+                                                "Turns automatic profile switching off."))
 
     def __init__(self, center):
         super().__init__(center)
@@ -1039,6 +1076,34 @@ class HotkeysPage(Page):
             row.addWidget(e)
             c.add(row)
         self.content.addWidget(c)
+        wc = Card("Show / hide a widget", "Optional. One key per widget, handy on a button box.")
+        grid = QGridLayout()
+        grid.setHorizontalSpacing(12)
+        grid.setVerticalSpacing(6)
+        for i, spec in enumerate(WIDGETS):
+            key = f"widget:{spec.name}"
+            e = QKeySequenceEdit()
+            try:
+                e.setMaximumSequenceLength(1)
+            except AttributeError:
+                pass
+            e.setFixedWidth(170)
+            e.setKeySequence(QKeySequence(self.ctx.config.data.get("hotkeys", {}).get(key, "")))
+            e.editingFinished.connect(lambda k=key: self._changed(k))
+            clr = button("", "ghost", "x", "Remove")
+            clr.clicked.connect(lambda _=False, k=key, ed=e: (ed.clear(), self._changed(k)))
+            st = Badge("", "muted")
+            self.edits[key], self.states[key] = e, st
+            r, col = divmod(i, 2)
+            cell = QHBoxLayout()
+            cell.setSpacing(6)
+            cell.addWidget(label(spec.title), 1)
+            cell.addWidget(st)
+            cell.addWidget(e)
+            cell.addWidget(clr)
+            grid.addLayout(cell, r, col)
+        wc.add(grid)
+        self.content.addWidget(wc)
         m = Card("Mouse in edit mode")
         for a, b in (("Drag", "Move a widget. It snaps to screen edges and other widgets."),
                      ("Drag a corner", "Scale the whole widget (text and all)."),
@@ -1056,6 +1121,10 @@ class HotkeysPage(Page):
 
     def _states(self, res):
         for key, st in self.states.items():
+            if not self.edits[key].keySequence().toString():
+                st.setText("")
+                st.setStyleSheet("")
+                continue
             if key not in res:
                 st.setText("Windows only")
                 continue
@@ -1306,8 +1375,10 @@ class AboutPage(Page):
         self.content.addWidget(c)
         lic = Card("Built with")
         for a, b in (("Python 3.13", "PSF License"), ("Qt 6 / PySide6", "LGPL v3"), ("NumPy", "BSD"),
-                     ("PyYAML", "MIT"), ("Inter and all bundled overlay fonts (Montserrat, Saira, Barlow, Oswald, Exo 2, "
-                                         "Titillium, Kanit, Teko and more)", "SIL Open Font License")):
+                     ("PyYAML", "MIT"), ("Inter and all bundled overlay fonts (Geist, Manrope, Montserrat, Saira, Barlow, "
+                                         "Sofia Sans, Oswald, Exo 2, Oxanium and more)", "SIL Open Font License"),
+                     ("Country flags: flag-icons by Lipis", "MIT"),
+                     ("FlairID to country table based on irDashies", "MIT")):
             lic.add(hbox(label(a), None, label(b, "faint")))
         self.content.addWidget(lic)
         self.content.addWidget(label("Not affiliated with iRacing.com Motorsport Simulations. iRacing data is read "

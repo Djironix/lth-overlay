@@ -22,11 +22,36 @@ class TrackMapWidget(PanelWidget):
     HEIGHT_MODE = "free"
     MIN_WIDTH = 120
     MIN_HEIGHT = 120
+    FAST_CAPABLE = True  # mašinos juda sklandžiai (iki 60 fps), trasa piešiama vieną kartą
 
     def __init__(self, ctx):
         self._pts_id = None
         self._path = None  # (raktas, QPainterPath, transformuoti taškai)
+        self._static = None  # (raktas, QPixmap) - fonas, antraštė, trasa
+        self._meta = ()
         super().__init__(ctx)
+
+    def fast_tick(self, timing) -> bool:
+        if self._view is None or not self._meta:
+            return False
+        live = timing.frame.CarIdxLapDistPct
+        if live is None:
+            return False
+        n = len(live)
+        old = {c[0]: c[1] for c in self._view[1]}
+        cars = []
+        for idx, color, number, me, in_pit, leader in self._meta:
+            pct = float(live[idx]) if idx < n else -1.0
+            if not (0.0 <= pct <= 1.0):
+                pct = old.get(idx, -1.0)
+                if pct < 0:
+                    continue
+            cars.append((idx, round(pct, 5), color, number, me, in_pit, leader))
+        cars = tuple(cars)
+        if cars == self._view[1]:
+            return False
+        self._view = (self._view[0], cars, self._view[2], self._view[3])
+        return True
 
     def content_key(self, snap):
         tm = snap.track_map or {}
@@ -44,6 +69,11 @@ class TrackMapWidget(PanelWidget):
                          r.class_pos == 1))
         cars.sort(key=lambda c: c[4])  # aš - paskutinis (viršuje)
         rec = None if pts is not None else (bool(tm.get("recording")), round(float(tm.get("progress", 0.0)), 2))
+        self._meta = tuple((c[0], c[2], c[3], c[4], c[5], c[6]) for c in cars)
+        if self.fast_active() and self._view is not None:  # padėtis atnaujina fast_tick
+            self._view = (pts, self._view[1] if self._view[1] else tuple(cars), rec, tuple(snap.sectors or ()))
+            return (id(pts) if pts is not None else None, self._meta, rec, self.width(), self.height(),
+                    self.cfg.get("mirror"), self.cfg.get("rotate"), self.cfg.get("numbers"), self.cfg.get("dot"))
         self._view = (pts, tuple(cars), rec, tuple(snap.sectors or ()))
         return (id(pts) if pts is not None else None, self._view[1], rec, self.width(), self.height(),
                 self.cfg.get("mirror"), self.cfg.get("rotate"), self.cfg.get("numbers"), self.cfg.get("dot"))
@@ -105,19 +135,42 @@ class TrackMapWidget(PanelWidget):
         pts, cars, rec, sectors = self._view
         r = QRectF(self.rect())
         pal = self.pal
-        p.setPen(Qt.PenStyle.NoPen)
-        p.setBrush(pal.bg)
-        p.drawRoundedRect(r, pal.radius, pal.radius)
-        y0 = 0.0
-        if self.cfg.get("show_header", True):
-            y0 = self.paint_header(p, "TRACK MAP", "" if rec is None else
-                                   (f"recording {rec[1] * 100:.0f}%" if rec[0] else "drive a clean lap to record"))
+        y0 = float(self.header_h()) if self.cfg.get("show_header", True) else 0.0
         m = self.pad() * 1.6
         area = QRectF(m, y0 + m, r.width() - 2 * m, r.height() - y0 - 2 * m)
+        sc = self._scale()
+        # nejudanti dalis (fonas, antraštė, trasa) - į talpyklą; kas kadrą piešiam tik taškus
+        dpr = self.devicePixelRatioF()
+        skey = (id(pts) if pts is not None else None, rec, tuple(sectors), self.width(), self.height(), id(pal),
+                self.cfg.get("mirror"), self.cfg.get("rotate"), self.cfg.get("show_header", True), dpr)
+        if self._static is None or self._static[0] != skey:
+            from PySide6.QtGui import QPixmap
+            pm = QPixmap(int(self.width() * dpr), int(self.height() * dpr))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.GlobalColor.transparent)
+            q = QPainter(pm)
+            q.setRenderHint(QPainter.RenderHint.Antialiasing)
+            self._paint_static(q, pts, rec, sectors, r, area, sc)
+            q.end()
+            self._static = (skey, pm)
+        p.drawPixmap(0, 0, self._static[1])
+        self._drew_bg = True
         if area.width() < 20 or area.height() < 20:
             return
         path, xy = self._geometry(pts, area)
-        sc = self._scale()
+        self._paint_cars(p, xy, cars, sc)
+
+    def _paint_static(self, p, pts, rec, sectors, r, area, sc):
+        pal = self.pal
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(pal.bg)
+        p.drawRoundedRect(r, pal.radius, pal.radius)
+        if self.cfg.get("show_header", True):
+            self.paint_header(p, "TRACK MAP", "" if rec is None else
+                              (f"recording {rec[1] * 100:.0f}%" if rec[0] else "drive a clean lap to record"))
+        if area.width() < 20 or area.height() < 20:
+            return
+        path, xy = self._geometry(pts, area)
         p.setBrush(Qt.BrushStyle.NoBrush)
         p.setPen(QPen(QColor(0, 0, 0, 150), 7 * sc, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                       Qt.PenJoinStyle.RoundJoin))
@@ -134,7 +187,9 @@ class TrackMapWidget(PanelWidget):
             nx, ny = -dy / n * 7 * sc, dx / n * 7 * sc
             p.setPen(QPen(pal.accent if i == 0 else QColor(255, 255, 255, 120), 2.5 * sc if i == 0 else 1.5 * sc))
             p.drawLine(QPointF(a.x() - nx, a.y() - ny), QPointF(a.x() + nx, a.y() + ny))
-        # mašinos
+
+    def _paint_cars(self, p, xy, cars, sc):
+        pal = self.pal
         dot = 4.2 * sc * float(self.cfg.get("dot", 1.0) or 1.0)
         numbers = self.cfg.get("numbers")
         for idx, prog, color, number, me, in_pit, leader in cars:
@@ -157,3 +212,62 @@ class TrackMapWidget(PanelWidget):
             if numbers and not in_pit:
                 p.setPen(pal.text)
                 self.draw_text(p, QRectF(c.x() + rad + 2, c.y() - 7, 40, 14), number, "tiny")
+
+
+class FlatMapWidget(TrackMapWidget):
+    """Trasa kaip tiesi linija: visas ratas nuo starto iki finišo (arba aš per vidurį)."""
+    NAME = "flat_map"
+    TITLE = "Flat track map"
+    HEIGHT_MODE = "auto"
+    MIN_WIDTH = 240
+    MIN_HEIGHT = 30
+
+    def desired_height(self) -> int:
+        return int(self.fonts.em_base * (3.4 if self.cfg.get("numbers") else 2.4))
+
+    def paint_content(self, p: QPainter):
+        if self._view is None:
+            return
+        _pts, cars, _rec, sectors = self._view
+        r = QRectF(self.rect())
+        pal = self.pal
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(pal.bg)
+        p.drawRoundedRect(r, pal.radius, pal.radius)
+        self._drew_bg = True
+        sc = self._scale()
+        pad = self.pad() * 1.4
+        x0, x1 = pad, r.width() - pad
+        yl = r.height() * (0.42 if self.cfg.get("numbers") else 0.5)
+        centered = self.cfg.get("center_me", False)
+        me_pct = next((c[1] for c in cars if c[4]), None)
+
+        def xpos(pct):
+            if centered and me_pct is not None:
+                pct = (pct - me_pct + 0.5) % 1.0
+            return x0 + (pct % 1.0) * (x1 - x0)
+
+        p.setPen(QPen(QColor(220, 220, 225, 120), 3 * sc, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(QPointF(x0, yl), QPointF(x1, yl))
+        for i, s in enumerate(sectors or (0.0,)):
+            x = xpos(s)
+            p.setPen(QPen(pal.accent if i == 0 else QColor(255, 255, 255, 110), 2.5 * sc if i == 0 else 1.2 * sc))
+            p.drawLine(QPointF(x, yl - 6 * sc), QPointF(x, yl + 6 * sc))
+        dot = 4.2 * sc * float(self.cfg.get("dot", 1.0) or 1.0)
+        numbers = self.cfg.get("numbers")
+        for idx, prog, color, number, me, in_pit, leader in cars:
+            x = xpos(prog)
+            col = QColor(pal.class_color(color)) if color else QColor(pal.text)
+            if in_pit:
+                col.setAlpha(110)
+            rad = dot * (1.5 if me else 1.0)
+            p.setPen(QPen(QColor(0, 0, 0, 200), 1.2))
+            p.setBrush(pal.accent if me else col)
+            p.drawEllipse(QPointF(x, yl), rad, rad)
+            if me:
+                p.setPen(QPen(QColor(255, 255, 255), 1.6 * sc))
+                p.setBrush(Qt.BrushStyle.NoBrush)
+                p.drawEllipse(QPointF(x, yl), rad + 2.5 * sc, rad + 2.5 * sc)
+            if numbers and not in_pit:
+                p.setPen(pal.accent if me else pal.dim)
+                self.draw_text(p, QRectF(x - 20, yl + rad + 2, 40, self.fonts.em_small * 1.2), number, "tiny", "c")

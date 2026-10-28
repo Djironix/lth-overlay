@@ -17,7 +17,7 @@ APP_DIR_NAME = "LTH Overlays"
 from .registry import (DEFAULT_WIDGETS, ENGINEER_TYPES, RELATIVE_COLUMNS,  # noqa: E402,F401
                        STANDINGS_COLUMNS, WEATHER_FIELDS)
 
-CONFIG_VERSION = 6
+CONFIG_VERSION = 7
 
 DEFAULT_CONFIG = {
     "version": CONFIG_VERSION,
@@ -30,12 +30,16 @@ DEFAULT_CONFIG = {
     "engine_hz": 20,
     "auto_profile": True,
     "profile": "race",
-    "series_themes": {},  # {"league:12345": "lth", "series:228": "minimal"}
+    "series_themes": {},
+    "outline": {"width": 1.0, "color": "accent", "opacity": 0.5},  # kontūras visiems valdikliams
+    "friends": {},  # {"123456": {"name": "J. Smith", "color": "#ecbe58"}} - paryškinti Standings / Relative  # {"league:12345": "lth", "series:228": "minimal"}
     "custom_colors": {},  # vartotojo spalvų perrašymai temai: {"accent": "#e2b13c", ...}
     "class_colors": {},  # klasės spalvos perrašymas: {"GT3": "#ff5888"}
     "hotkeys": {"edit": "Ctrl+Shift+E", "toggle_all": "Ctrl+Shift+H", "rain_next": "Ctrl+Shift+R"},
     "open_control_center": True,
     "onboarding_done": False,  # pirmo paleidimo tutorialas  # atidaryti Control Center paleidus ranka
+    "telemetry": {"record": True, "hz": 30, "auto_save_best": True},  # savo ratų telemetrija
+    "obs": {"enabled": False, "port": 8399, "fps": 30},  # OBS Browser Source serveris (tik 127.0.0.1)
     "snap": True,  # prilipimas prie tinklelio ir kitų valdiklių
     "profiles": {
         "race": {"name": "Race", "widgets": copy.deepcopy(DEFAULT_WIDGETS)},
@@ -97,6 +101,8 @@ class Config:
                 for wc in ((prof or {}).get("widgets") or {}).values():
                     if isinstance(wc, dict):
                         wc.pop("lth_only", None)
+                        if wc.pop("race_only", False) and "sessions" not in wc:  # v7: matomumas pagal sesiją
+                            wc["sessions"] = {"practice": False, "qualify": False, "warmup": False, "race": True}
             # v5: nauji valdikliai ir laukai ateina iš numatytų reikšmių (_merge)
             raw["version"] = CONFIG_VERSION
             self.data = _merge(DEFAULT_CONFIG, raw)
@@ -140,6 +146,16 @@ class Config:
 
     def reset_widget(self, name: str):
         self.data["profiles"][self.profile_key]["widgets"][name] = copy.deepcopy(DEFAULT_WIDGETS[name])
+
+    def friends(self) -> dict:
+        """Draugų / žymų spalvos: {iRacing ID: "#rrggbb"}."""
+        out = {}
+        for k, v in (self.data.get("friends") or {}).items():
+            try:
+                out[int(k)] = v.get("color", "#ecbe58") if isinstance(v, dict) else str(v)
+            except (TypeError, ValueError):
+                pass
+        return out
 
     def theme_for(self, league_id: int, series_id: int) -> str:
         st = self.data.get("series_themes", {})

@@ -115,10 +115,25 @@ FONT_CHOICES = {  # raktas: (šeima, pavadinimas, grupė)
     "teko": ("Teko", "Teko", "Condensed"),
     "rajdhani": ("Rajdhani", "Rajdhani", "Techno"),
     "chakra": ("Chakra Petch", "Chakra Petch", "Techno"),
+    "sofia": ("Sofia Sans Condensed", "Sofia Sans Condensed", "Condensed"),
+    "sofiasemi": ("Sofia Sans Semi Condensed", "Sofia Sans Semi Condensed", "Condensed"),
+    "encode": ("Encode Sans Semi Condensed", "Encode Sans Semi Condensed", "Condensed"),
+    "sairawide": ("Saira", "Saira", "Wide"),
+    "barlowwide": ("Barlow", "Barlow", "Wide"),
+    "chivo": ("Chivo", "Chivo", "Wide"),
+    "geist": ("Geist", "Geist", "Modern"),
+    "manrope": ("Manrope", "Manrope", "Modern"),
+    "outfit": ("Outfit", "Outfit", "Modern"),
+    "sora": ("Sora", "Sora", "Modern"),
+    "figtree": ("Figtree", "Figtree", "Modern"),
+    "jakarta": ("Plus Jakarta Sans", "Plus Jakarta Sans", "Modern"),
+    "redhat": ("Red Hat Display", "Red Hat Display", "Modern"),
+    "rubik": ("Rubik", "Rubik", "Modern"),
+    "oxanium": ("Oxanium", "Oxanium", "Techno"),
     "jetbrains": ("JetBrains Mono", "JetBrains Mono", "Mono"),
     "system": ("Bahnschrift", "Bahnschrift (Windows)", "System"),
 }
-FONT_GROUPS = ("Wide", "Condensed", "Techno", "Mono", "System")
+FONT_GROUPS = ("Modern", "Wide", "Condensed", "Techno", "Mono", "System")
 FALLBACK = ["Bahnschrift", "Segoe UI", "Segoe UI Symbol", "DejaVu Sans", "Arial"]
 _loaded = False
 
@@ -185,8 +200,9 @@ class Palette:
 _PROBE = {}
 try:
     _TNUM = QFont.Tag("tnum")
+    _WGHT = QFont.Tag("wght")
 except (AttributeError, TypeError):
-    _TNUM = None
+    _TNUM = _WGHT = None
 
 
 def _probe(family: str):
@@ -251,6 +267,11 @@ class Fonts:
         f.setWeight(weight)
         f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
         f.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
+        if _WGHT is not None:  # kintamo storio šriftai (VF) kitaip lieka ploniausi
+            try:
+                f.setVariableAxis(_WGHT, float(int(weight.value) if hasattr(weight, "value") else int(weight)))
+            except (AttributeError, TypeError):
+                pass
         if _TNUM is not None:  # vienodo pločio skaitmenys: gap'ai „nešokinėja“ pločiu
             try:
                 f.setFeature(_TNUM, 1)

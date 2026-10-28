@@ -87,7 +87,7 @@ class SimRace:
 
     # ---- sesijos modelis ----
     def _model(self) -> SessionModel:
-        m = SessionModel(track_name="Sim Raceway", track_length_m=self.track_m, league_id=0, update=1)
+        m = SessionModel(track_name="Sim Raceway", track_length_m=self.track_m, league_id=0, update=1, incident_limit=25)
         m.driver_car_idx = self.me
         used = set()
         for i in range(self.n):
@@ -103,14 +103,19 @@ class SimRace:
                                   class_id=c, class_name=CLASSES[c]["name"], class_color=CLASSES[c]["color"],
                                   class_est_lap=self.track_m / 45.0 / CLASSES[c]["pace"], car_path=car_path,
                                   car_name=car_path, brand=brand_for(car_path), irating=1200 + (i * 137) % 3800,
-                                  license=["A 4.21", "B 3.10", "C 2.75", "A 2.99"][i % 4], is_pace_car=False,
-                                  is_spectator=False)
+                                  license=["A 4.21", "B 3.10", "C 2.75", "A 2.99", "D 1.80", "R 2.40", "P 4.99"][i % 7],
+                                  is_pace_car=False, is_spectator=False,
+                                  country=["lt", "lv", "ee", "pl", "de", "gb", "us", "fi", "se", "nl"][i % 10] if i % 11
+                                  else "",
+                                  lic_color=[0x0153DB, 0x00C702, 0xFEEC04, 0x0153DB, 0xFC8A27, 0xFC0706, 0x000000][i % 7],
+                                  car_short=car_path.replace("_", " ").title())
             if c not in m.classes:
                 m.classes[c] = {"name": CLASSES[c]["name"], "color": CLASSES[c]["color"],
                                 "est_lap": self.track_m / 45.0 / CLASSES[c]["pace"]}
         m.sessions[0] = SessionDesc(num=0, type="race", name="RACE", laps="unlimited")
         m.sectors = [0.0, 0.28, 0.61]
         m.track_id = 999
+        m.car_path = m.drivers[self.me].car_path if self.me in m.drivers else ""
         return m
 
     # ---- fizika ----

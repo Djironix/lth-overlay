@@ -34,13 +34,16 @@ class OverlayWidget(QWidget):
     # "free" - grafika (piešiama į bet kokį aukštį), "auto" - pagal turinį
     # (viršaus / apačios kraštas tada keičia viso valdiklio dydį).
     HEIGHT_MODE = "auto"
+    obs_demo = False
+    obs_mode = False  # OBS kopija (preview_mode, bet su tikrais duomenimis)
     preview_mode = False  # Control Center peržiūros kopija: be redagavimo rėmelio
-    FAST_CAPABLE = False  # valdiklis moka fast_tick(): savo laikmatis (iki 60 Hz) tiesiai iš variklio
+    FAST_CAPABLE = False
+    INTERACTIVE = False  # valdiklis su mygtukais: pelė jam veikia visada (ne tik redaguojant)  # valdiklis moka fast_tick(): savo laikmatis (iki 60 Hz) tiesiai iš variklio
 
     def __init__(self, ctx):
         flags = (Qt.WindowType.FramelessWindowHint | Qt.WindowType.WindowStaysOnTopHint | Qt.WindowType.Tool
                  | Qt.WindowType.WindowDoesNotAcceptFocus | Qt.WindowType.NoDropShadowWindowHint)
-        if not win32.IS_WIN:
+        if not win32.IS_WIN and not self.INTERACTIVE:
             flags |= Qt.WindowType.WindowTransparentForInput
         super().__init__(None, flags)
         self.ctx = ctx
@@ -289,7 +292,10 @@ class OverlayWidget(QWidget):
             return False
         if c.get("hide_when_spectating") and snap.watching:
             return False
-        if c.get("race_only") and snap.session_type != "race":
+        if c.get("race_only") and snap.session_type != "race":  # seni nustatymai (iki v0.6)
+            return False
+        sess = c.get("sessions")
+        if isinstance(sess, dict) and sess.get(snap.session_type, True) is False:
             return False
         return True
 
@@ -310,7 +316,7 @@ class OverlayWidget(QWidget):
     def showEvent(self, e):
         super().showEvent(e)
         if not self._native_ready:
-            win32.make_overlay(self, click_through=not self.editing)
+            win32.make_overlay(self, click_through=not (self.editing or self.INTERACTIVE))
             self._native_ready = True
         self._update_fast()
 
@@ -372,10 +378,10 @@ class OverlayWidget(QWidget):
             self.unsetCursor()
             self._drag = None
         if win32.IS_WIN:
-            win32.set_click_through(self, not on)
+            win32.set_click_through(self, not (on or self.INTERACTIVE))
         else:
             vis = self.isVisible()
-            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, not on)
+            self.setWindowFlag(Qt.WindowType.WindowTransparentForInput, not (on or self.INTERACTIVE))
             if vis:
                 self.show()
         self._key = object()
@@ -395,10 +401,48 @@ class OverlayWidget(QWidget):
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_Source)
         p.fillRect(self.rect(), Qt.GlobalColor.transparent)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
+        self._drew_bg = False
         self.paint_content(p)
+        if self._drew_bg:
+            self._paint_outline(p)
         if self.editing and not self.preview_mode:
             self._paint_edit(p)
         p.end()
+
+    # ---------------- kontūras (stroke) ----------------
+    def outline_style(self):
+        """(storis, QColor) arba None. Valdiklio nustatymas arba globalus (Appearance)."""
+        c = self.cfg
+        mode = c.get("outline_mode", "global")
+        if mode == "off":
+            return None
+        if mode == "custom":
+            width = float(c.get("outline_width", 1.5) or 0)
+            color = c.get("outline_color") or "accent"
+            opacity = float(c.get("outline_opacity", 0.8))
+        else:
+            g = self.ctx.config.data.get("outline") or {}
+            width = float(g.get("width", 1.0) or 0)
+            color = g.get("color", "accent")
+            opacity = float(g.get("opacity", 0.5))
+        if width <= 0:
+            return None
+        if isinstance(color, str) and color.startswith("#"):
+            col = QColor(color)
+        else:
+            col = QColor(getattr(self.pal, color, self.pal.accent))
+        col.setAlpha(int(255 * max(0.0, min(1.0, opacity))))
+        return width, col
+
+    def _paint_outline(self, p: QPainter):
+        st = self.outline_style()
+        if st is None:
+            return
+        width, col = st
+        rad = self._drew_bg if not isinstance(self._drew_bg, bool) else self.pal.radius
+        p.setPen(QPen(col, width))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawRoundedRect(QRectF(self.rect()).adjusted(width / 2, width / 2, -width / 2, -width / 2), rad, rad)
 
     # ---------------- redagavimo rėmelis ----------------
     def _edit_font(self):

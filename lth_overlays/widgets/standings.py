@@ -1,8 +1,9 @@
 """Standings: visas laukas pagal poziciją, su multiklase ir filtrais."""
 from __future__ import annotations
 
-from ..theme import fmt_clock, fmt_gap, fmt_lap, short_name
-from .table import CENTER, LEFT, RIGHT, Cell, TableWidget
+from ..registry import STANDINGS_COLUMNS
+from ..theme import fmt_gap, fmt_lap, short_name
+from .table import CENTER, LEFT, RIGHT, Cell, TableWidget, ordered_columns
 
 SESSION_NAMES = {"race": "RACE", "qualify": "QUALIFYING", "practice": "PRACTICE", "warmup": "WARMUP"}
 
@@ -16,33 +17,36 @@ class StandingsWidget(TableWidget):
     TITLE = "Standings"
     MIN_WIDTH = 220
     HEIGHT_MODE = "rows"
-    WIDTHS = {"classbar": 0.01, "pos": 1.7, "change": 1.0, "number": 2.4, "brand": 2.5, "name": None,
-              "gap": 3.6, "interval": 3.6, "last": 4.2, "best": 4.2, "start": 2.0, "irating": 2.8,
-              "license": 3.0, "pit": 2.6, "tire": 1.3}
+    WIDTHS = {"classbar": 0.01, "pos": 1.6, "change": 0.9, "number": 2.2, "flag": 1.45, "brand": 2.3, "name": None,
+              "carname": 6.5, "gap": 3.4, "interval": 3.2, "last": 4.0, "best": 4.0, "start": 1.9, "irating": 2.3, "irchange": 2.2,
+              "license": 2.0, "pit": 2.4, "tire": 1.2}
 
     def __init__(self, ctx):
         self._rows = []
         self._cols = []
-        self._title = ("", "")
+        self._title = ("", ())
+        self._footer = ()
+        self._border = None
+        self._friends = {}
         super().__init__(ctx)
 
     # ---------------- duomenys -> eilutės ----------------
     def content_key(self, snap):
         c = self.cfg
-        cols = [k for k in c["order"] if c["columns"].get(k)]
+        cols = ordered_columns(c, STANDINGS_COLUMNS)
+        self.WIDTHS = dict(type(self).WIDTHS, license=3.6 if c.get("license_style") == "full" else 2.0)
         self._cols = ["classbar"] + cols
+        self._footer = self.footer_info(snap)
+        self._friends = self.ctx.config.friends()
         rows = self._build_rows(snap, cols)
         self._rows = rows
+        self._cols = ["classbar"] + self.collapse_empty(cols, rows)
         stype = SESSION_NAMES.get(snap.session_type, "")
-        if snap.session_type == "race":
-            if 0 < snap.laps_remain < 30000:
-                right = f"{snap.laps_remain} laps left"
-            else:
-                right = f"{fmt_clock(snap.time_remain)} left" if snap.time_remain > 0 else ""
-        else:
-            right = f"{fmt_clock(snap.time_remain)} left" if 0 < snap.time_remain < 1e5 else ""
-        self._title = (stype, right)
-        return (tuple(rows), tuple(cols), self._title, self.width())
+        info = self.header_info(snap)
+        self._title = (stype, info)
+        self._border = self.session_border(snap)
+        return (tuple(rows), tuple(cols), self._title, self._footer, self._border, self.width(),
+                bool(self.cfg.get("column_header")))
 
     def _select(self, snap, rows):
         """Filtrai: visi / top N + aplink mane / tik aplink mane."""
@@ -90,8 +94,12 @@ class StandingsWidget(TableWidget):
                 else:  # kitos klasės: tik top N
                     sel, idx = rows[:other_n], list(range(min(other_n, len(rows))))
                 info = snap.classes.get(cid, {})
+                sof = (snap.sof or {}).get(cid)
+                count = f"{len(rows)} car{'s' if len(rows) != 1 else ''}"
+                if sof:
+                    count += f"  ·  SOF {sof / 1000:.1f}k" if sof >= 1000 else f"  ·  SOF {sof}"
                 out.append(("class", (info.get("name") or rows[0].class_name, ("rgb", info.get("color", 0xFFFFFF)),
-                                      f"{len(rows)} car{'s' if len(rows) != 1 else ''}"), ()))
+                                      count), ()))
                 meta.append(("class", cid, mine, False))
                 self._append(out, sel, idx, cols, snap, by_class=True, meta=meta, cid=cid, mine=mine)
         else:
@@ -123,7 +131,7 @@ class StandingsWidget(TableWidget):
         Pirmiausia trumpinamos kitos klasės (nuo galo), mano eilutė lieka visada."""
         avail = self.avail_body_height()
         if avail is not None:
-            budget = avail / self.row_h()
+            budget = max(1.0, (avail - self.footer_h() - self.colhead_h()) / self.row_h())
         else:
             budget = int(self.cfg.get("max_rows", 26)) + sum(1 for m in meta if m[0] != "car") * 0.9
         out, meta = list(out), list(meta)
@@ -176,11 +184,16 @@ class StandingsWidget(TableWidget):
                                   fg="good" if ch > 0 else "bad", align=CENTER, font="tiny"))
             elif k == "number":
                 cells.append(self.number_cell(k, r))
+            elif k == "flag":
+                cells.append(self.flag_cell(k, r))
             elif k == "brand":
-                cells.append(Cell(k, r.brand.get("short", ""), fg="text", bg=("hex", r.brand.get("color", "#555")),
-                                  align=CENTER, font="tiny"))
+                cells.append(self.brand_cell(k, r))
+            elif k == "carname":
+                cells.append(self.carname_cell(k, r))
             elif k == "name":
-                cells.append(Cell(k, short_name(r, c.get("name_mode", "abbrev"), self.pal.upper_names), fg=base, font="bold" if r.is_me else "base"))
+                friend = self._friends.get(r.user_id) if r.user_id and not r.is_me else None
+                cells.append(Cell(k, short_name(r, c.get("name_mode", "abbrev"), self.pal.upper_names),
+                                  fg=("hex", friend) if friend else base, font="bold" if r.is_me else "base"))
             elif k == "gap":
                 if race:
                     t = "" if r.gap is None and not r.gap_laps else fmt_gap(r.gap, r.gap_laps, r.stale or r.approx)
@@ -202,32 +215,31 @@ class StandingsWidget(TableWidget):
                 cells.append(Cell(k, f"{ch:+d}" if ch else "", fg="good" if ch > 0 else "bad", align=RIGHT, font="small"))
             elif k == "irating":
                 cells.append(Cell(k, irating_text(r.irating), fg="dim", align=RIGHT, font="small"))
+            elif k == "irchange":
+                cells.append(self.irchange_cell(k, r, snap))
             elif k == "license":
-                cells.append(Cell(k, r.license.split(" ")[0] if r.license else "", fg="dim", align=CENTER, font="small"))
+                cells.append(self.license_cell(k, r))
             elif k == "pit":
-                if r.status == "pit":
-                    cells.append(Cell(k, "PIT", fg="text", bg="pit", align=CENTER, font="tiny"))
-                elif r.status == "off":
-                    cells.append(Cell(k, "OFF", fg="text", bg="yellow", align=CENTER, font="tiny"))
-                elif r.status in ("garage", "out"):
-                    cells.append(Cell(k, "OUT", fg="dim", align=CENTER, font="tiny"))
-                elif race and r.laps_since_pit is not None:
-                    cells.append(Cell(k, f"{r.laps_since_pit}", fg="dim", align=CENTER, font="small"))
-                else:
-                    cells.append(Cell(k, "", align=CENTER))
+                st = self.status_cell(k, r, race)
+                if not st[1] and race and r.laps_since_pit is not None:
+                    st = Cell(k, f"{r.laps_since_pit}", fg="dim", align=CENTER, font="small")
+                cells.append(st)
             elif k == "tire":
                 cells.append(Cell(k, "W" if r.tire == 1 else "", fg="blue", align=CENTER, font="tiny"))
-        flags = ("me",) if r.is_me else ()
+        flags = ("me",) if r.is_me else (("friend",) if self._friends.get(r.user_id) else ())
         return ("car", tuple(cells), flags)
 
     # ---------------- piešimas ----------------
     def desired_height(self) -> int:
         rh = self.row_h()
         h = sum(rh * self._row_units(kind) for kind, _, _ in self._rows)
-        return int(self.header_h() + h + 6)
+        return int(self.header_h() + self.colhead_h() + h + self.footer_h() + 6)
 
     def paint_content(self, p):
         if not self._rows and not self.editing:
             return
-        y = self.paint_frame(p, *self._title) if self._rows or self.editing else 0
-        self.paint_rows(p, self._rows, self._cols, y)
+        y = self.paint_frame(p, *self._title)
+        y = self.paint_colhead(p, self._rows, self._cols, y)
+        y = self.paint_rows(p, self._rows, self._cols, y)
+        self.paint_footer(p, y)
+        self.paint_flag_border(p)

@@ -125,6 +125,23 @@ if IS_WIN:
         _SHOW_MSG = 0
 
 
+# ---- iRacing pit komandos (oficialus iRacing SDK broadcast pranešimas) ----
+PIT_CLEAR, PIT_WS, PIT_FUEL, PIT_LF, PIT_RF, PIT_LR, PIT_RR, PIT_CLEAR_TIRES, PIT_FR, PIT_CLEAR_WS, PIT_CLEAR_FR, \
+    PIT_CLEAR_FUEL = range(12)
+_IRSDK_MSG = 0
+
+
+def pit_command(mode: int, value: int = 0) -> bool:
+    """Siunčia iRacing pit komandą (kaip black box). value: litrai kurui, kPa padangoms (0 = nekeisti)."""
+    global _IRSDK_MSG
+    if not IS_WIN:
+        return False
+    if not _IRSDK_MSG:
+        _IRSDK_MSG = int(_u32.RegisterWindowMessageW("IRSDK_BROADCASTMSG"))
+    BROADCAST_PIT = 9
+    return bool(_u32.SendNotifyMessageW(0xFFFF, _IRSDK_MSG, BROADCAST_PIT | (int(mode) << 16), int(value) & 0xFFFF))
+
+
 def request_show_running_instance() -> bool:
     if not IS_WIN or not _SHOW_MSG:
         return False

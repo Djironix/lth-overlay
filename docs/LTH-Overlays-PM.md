@@ -1,6 +1,6 @@
 # LTH Overlays — produkto ir darbų planas (handoff)
 
-Atnaujinta: 2026-10-27 · Dabartinė versija: **v0.4.0** (live 0.3.1 + Control Center + 21 naujas valdiklis) · Toliau: Windows patikra, Engineer v1.1, Store
+Atnaujinta: 2026-10-28 · Dabartinė versija: **v0.6.0** · Toliau: Windows patikra (pit komandos, OBS, chat, telemetrija gyvai), E2 atnaujinimų pranešimas, E3 balsas
 
 ---
 
@@ -27,6 +27,57 @@ Atnaujinta: 2026-10-27 · Dabartinė versija: **v0.4.0** (live 0.3.1 + Control C
    - Antivirusams draugiškai: jokio PyInstaller one-file, UPX, klaviatūros hook'ų, admin teisių ar kodo atsisiuntimo.
 
 ---
+
+## 0.0 v0.6.0 — kas padaryta
+
+Tyrimas: `docs/research-v0.6.md` (RaceLab, irDashies, iOverlay, Kapps, bendruomenės nuomonė).
+
+- **Standings / Relative** (`widgets/table.py`, `relative.py`, `standings.py`):
+  - vėliavos (FlairID → ISO, `lth_timing/countries.py`; sprite `data/flags`, flag-icons MIT);
+  - licencijos spalva iš `LicColor`, mašinos modelis, statuso ženkliukai (`CarIdxSessionFlags`);
+  - header / footer juostos (`INFO_ITEMS`, laukas "items" su tvarka);
+  - vėliavos kontūras, tankis, eilučių stilius, stulpelių antraštės (`column_header`);
+  - iRating prognozė (`lth_timing/laps.py` `project_irating`, stulpelis `irchange`, header `ir_proj`);
+  - tušti stulpeliai susitraukia (`COLLAPSIBLE`).
+- **Kontūras** visiems valdikliams: `config["outline"]` + valdiklio `outline_mode`; `window._paint_outline()` (kai `_drew_bg`).
+- **Inputs**: greitis, pavara, vairas, %.
+- **Pit commands** (`race.PitCommandsWidget`, `INTERACTIVE`): `win32.pit_command` (IRSDK_BROADCASTMSG).
+- **Track map**: greitas kelias 30/60 fps + statinis sluoksnis talpykloje. **Flat track map** (`FlatMapWidget`).
+- **Šriftai**: +14 (33 iš viso, grupė „Modern“); VF šriftams nustatoma `wght` ašis (`theme.Fonts._font`). Visi turi LT raides ir `tnum`.
+- **Lenktynių funkcijos**:
+  - Lap timer + PB (`lth_overlays/pb.py`, `pb.json`);
+  - Sectors (`laps.SectorTracker`, `snap.my_sectors`);
+  - Overtake alert ir Rejoin (`widgets/alerts.py`);
+  - incidentų limitas iš `WeekendOptions.IncidentLimit` (`snap.incident_limit`).
+- **OBS** (`lth_overlays/obs.py`):
+  - `ThreadingHTTPServer` tik 127.0.0.1:8399; kadrai piešiami UI gijoje atskiromis kopijomis (`obs_mode`), tik kol OBS prašo;
+  - URL: `/w/<valdiklis>`, `/layout?screen=N`, `?demo=1`; Control Center → Stream.
+- **Chat** (`lth_overlays/chat.py`, `widgets/chat.py`):
+  - Twitch anoniminis IRC;
+  - YouTube per vidinį live_chat API (be rakto, gali lūžti);
+  - gijos sustoja po 30 s be skaitymo; moderacijos ištrynimai gerbiami.
+- **Drivers** puslapis (`control/drivers_page.py`): žymos (Friend / Teammate / Rival / Careful / Fast) su spalva → `config["friends"]`.
+- **Hotkey'ai** kiekvienam valdikliui (`widget:<name>`) ir „Next profile“; `app._hotkey_actions()`.
+- **Matomumas pagal sesiją**: laukas `sessions` (checks). Config v7 migruoja `race_only`.
+- **Garage cover** (`widgets/cover.py`).
+- **Telemetrija** (`lth_timing/telemetry.py`, `control/telemetry_page.py`):
+  - `LapRecorder` engine gijoje: tik savo mašina, 30/60 Hz;
+  - ratas perskaičiuojamas į atstumo tinklelį (~2 m);
+  - `.lthlap` = zip (meta.json + npz be pickle);
+  - geriausias ratas automatiškai `%APPDATA%\LTH Overlays\laps`;
+  - sesijos ataskaita, A/B palyginimas su delta, importas / eksportas, CSV.
+- Testai: 66 (14 naujų `tests/test_v06.py`).
+- Našumas:
+  - 3 numatyti valdikliai ~6–7 % vieno branduolio (sandbox, programinis piešimas);
+  - Track map 60 fps prideda ~9 %, todėl numatyta 30 fps.
+
+**Patikrinti Windows'e:**
+- pit komandų mygtukai trasoje;
+- OBS Browser Source permatomumas;
+- Twitch / YouTube chat su tikru kanalu;
+- `.lthlap` importas iš draugo;
+- per-widget hotkey'ai;
+- vėliavų / licencijų spalvos su tikrais duomenimis.
 
 ## 0.1 v0.4.0 — kas padaryta (ant live 0.3.1)
 

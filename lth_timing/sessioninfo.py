@@ -10,6 +10,8 @@ import os
 import re
 from dataclasses import dataclass, field
 
+from .countries import iso_for
+
 import yaml
 
 try:  # C parseris yra ~10x greitesnis
@@ -103,6 +105,11 @@ class Driver:
     license: str
     is_pace_car: bool
     is_spectator: bool
+    country: str = ""  # ISO kodas (iš iRacing Flair)
+    country_name: str = ""
+    lic_color: int = -1  # iRacing licencijos spalva (RGB)
+    car_short: str = ""  # CarScreenNameShort
+    team_id: int = 0
 
 
 @dataclass
@@ -130,6 +137,8 @@ class SessionModel:
     classes: dict = field(default_factory=dict)  # class_id -> {name, color, est_lap}
     sessions: dict = field(default_factory=dict)  # num -> SessionDesc
     update: int = -1
+    incident_limit: int = 0  # 0 = neribota / nežinoma
+    car_path: str = ""  # mano mašina (asmeniniam rekordui)
 
     @property
     def multiclass(self) -> bool:
@@ -173,6 +182,8 @@ def build_model(data: dict, update: int = -1) -> SessionModel:
     m.league_id = int(_num(wi.get("LeagueID"), 0))
     m.series_id = int(_num(wi.get("SeriesID"), 0))
     m.team_racing = bool(int(_num(wi.get("TeamRacing"), 0)))
+    lim = str((wi.get("WeekendOptions") or {}).get("IncidentLimit") or "")
+    m.incident_limit = int(_num(lim, 0)) if lim.strip().isdigit() else 0
 
     sti = data.get("SplitTimeInfo") or {}
     starts = sorted({float(_num(x.get("SectorStartPct"), -1)) for x in (sti.get("Sectors") or [])
@@ -211,6 +222,11 @@ def build_model(data: dict, update: int = -1) -> SessionModel:
             license=str(d.get("LicString") or ""),
             is_pace_car=bool(int(_num(d.get("CarIsPaceCar"), 0))),
             is_spectator=bool(int(_num(d.get("IsSpectator"), 0))),
+            country=iso_for(d.get("FlairID"), d.get("FlairName") or ""),
+            country_name=str(d.get("FlairName") or ""),
+            lic_color=_color(d.get("LicColor")) if d.get("LicColor") not in (None, "") else -1,
+            car_short=str(d.get("CarScreenNameShort") or car_name or ""),
+            team_id=int(_num(d.get("TeamID"), 0)),
         )
         m.drivers[idx] = drv
         if not drv.is_pace_car and not drv.is_spectator and class_id not in m.classes:
@@ -237,4 +253,6 @@ def build_model(data: dict, update: int = -1) -> SessionModel:
             laps=str(s.get("SessionLaps") or ""),
             results=list(s.get("ResultsPositions") or []),
         )
+    me = m.drivers.get(m.driver_car_idx)
+    m.car_path = me.car_path if me else ""
     return m

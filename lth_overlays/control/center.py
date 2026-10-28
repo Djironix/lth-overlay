@@ -23,18 +23,25 @@ from .layout_page import LayoutPage
 from .pages import (AboutPage, AppearancePage, DiagnosticsPage, GeneralPage, HotkeysPage, OverviewPage,
                     PerformancePage, ProfilesPage, WidgetDetailPage, WidgetsPage)
 from .preview import PreviewRenderer
+from .drivers_page import DriversPage
+from .stream_page import StreamPage
+from .telemetry_page import TelemetryPage
 from .style import T, qss, ui_font
 
 NAV = (
-    (None, (("overview", "Overview", "home"), ("widgets", "Widgets", "widgets"), ("layout", "Layout", "layout"))),
+    (None, (("overview", "Overview", "home"), ("widgets", "Widgets", "widgets"), ("layout", "Layout", "layout"),
+           ("telemetry", "Telemetry", "delta"))),
     ("CUSTOMIZE", (("profiles", "Profiles", "layers"), ("appearance", "Appearance", "palette"),
-                   ("hotkeys", "Hotkeys", "keyboard"))),
+                   ("drivers", "Drivers", "star"),
+                   ("hotkeys", "Hotkeys", "keyboard"), ("stream", "Stream", "broadcast"))),
     ("SYSTEM", (("general", "General", "settings"), ("performance", "Performance", "activity"),
                 ("diagnostics", "Diagnostics", "bug"), ("about", "About", "info"))),
 )
 PAGES = {"overview": OverviewPage, "widgets": WidgetsPage, "layout": LayoutPage, "profiles": ProfilesPage,
          "appearance": AppearancePage, "hotkeys": HotkeysPage, "general": GeneralPage,
-         "performance": PerformancePage, "diagnostics": DiagnosticsPage, "about": AboutPage}
+         "performance": PerformancePage, "diagnostics": DiagnosticsPage, "about": AboutPage,
+         "stream": StreamPage, "drivers": DriversPage,
+         "telemetry": TelemetryPage}
 
 
 class ControlCenter(QMainWindow):

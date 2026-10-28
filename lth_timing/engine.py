@@ -33,6 +33,8 @@ import numpy as np
 
 from .frame import (MAX_CARS, STATE_CHECKERED, STATE_RACING, SURF_NOT_IN_WORLD,
                     SURF_OFF_TRACK, Frame)
+from .laps import SectorTracker, project_irating
+from .telemetry import LapRecorder
 from .player import PlayerTracker
 from .sessioninfo import SessionModel
 from .rain_tips import RainCaller
@@ -84,6 +86,10 @@ class CarRow:
     pos_change_start: int = 0
     pos_change_lap: int = 0
     is_me: bool = False
+    country: str = ""  # ISO (vėliava)
+    lic_color: int = -1
+    car_short: str = ""
+    flag_bits: int = 0  # CarIdxSessionFlags: mėlyna, juoda, meatball...
 
 
 @dataclass
@@ -134,6 +140,11 @@ class Snapshot:
     battle: list = field(default_factory=list)  # sektorių palyginimas su mašinomis šalia
     sof: dict = field(default_factory=dict)  # klasė -> SOF (0 = bendras)
     rain_call: object = None  # rain_tips.RainCall arba None
+    incident_limit: int = 0  # iš sesijos (0 = neribota)
+    track_key: str = ""
+    car_key: str = ""
+    my_sectors: object = None  # laps.SectorState
+    ir_change: dict = field(default_factory=dict)  # idx -> prognozuojamas iRating pokytis (lenktynėse)
     car_pct: object = None  # np.ndarray: kiekvienos mašinos rato dalis šiame kadre (trasos žemėlapiui)
 
 
@@ -141,6 +152,8 @@ class TimingEngine:
     def __init__(self, point_spacing_m: float = POINT_SPACING_M, history_laps: int = HISTORY_LAPS,
                  rate_hz: float = 20.0, standings_hz: float = 2.0, maps_dir: str | None = None):
         self.player = PlayerTracker()
+        self.my_sectors = SectorTracker()
+        self.recorder = LapRecorder()
         self.rain = RainCaller()
         self.trackmap = TrackMap(maps_dir)
         self.pit_losses = []
@@ -196,6 +209,10 @@ class TimingEngine:
         self._prev_proc_t = None
         if hasattr(self, "player"):
             self.player.reset()
+        if hasattr(self, "my_sectors"):
+            self.my_sectors.reset(())
+        if hasattr(self, "recorder"):
+            self.recorder.reset()
 
     def set_session(self, model: SessionModel | None):
         if model is None or model is self.session:
@@ -207,6 +224,11 @@ class TimingEngine:
         self.player.fuel_max_l = model.fuel_max_l
         if model.track_length_m:
             self.trackmap.set_track(model.track_key)
+        me = model.drivers.get(model.driver_car_idx)
+        self.recorder.set_session({"track": model.track_name, "track_key": model.track_key,
+                                   "track_config": model.track_config, "car": model.car_path,
+                                   "car_name": me.car_name if me else "", "driver": me.name if me else "",
+                                   "track_m": model.track_length_m}, model.track_length_m)
 
     # ------------------------------------------------------------------
     # Kadro apdorojimas (60 Hz)
@@ -218,6 +240,8 @@ class TimingEngine:
         self.frame = f
         self.stats["frames"] += 1
         self.player.sample_inputs(f)
+        pl = f.PlayerCarIdx
+        self.recorder.sample(f, bool(f.IsOnTrack) and not bool(f.IsReplayPlaying) and pl is not None and pl >= 0)
         t = float(f.SessionTime)
         num = f.SessionNum
         # Nauja sesija arba šuolis laike (replay) -> pradedam iš naujo
@@ -234,6 +258,9 @@ class TimingEngine:
         self.weather.update(f)
         self.player.update(f, t)
         self.trackmap.update(f, t)
+        m = self.session
+        self.my_sectors.update(t, f.values.get("LapDistPct"), bool(f.values.get("OnPitRoad")),
+                               m.sectors if m and m.sectors else (0.0, 1 / 3, 2 / 3))
         dt_proc = t - self._prev_proc_t if self._prev_proc_t is not None else 0.0
         self._prev_proc_t = t
 
@@ -485,7 +512,13 @@ class TimingEngine:
         if dc is None or dc[0] is not rows:
             dc = self._derived = (rows, self._sof(rows), self._battle(me, snap.relative, snap.sectors),
                                   self._pit_summary())
-        snap.sof, snap.battle, snap.pit = dc[1], dc[2], dc[3]
+            dc = dc + (project_irating(rows) if snap.session_type == "race" else {},)
+            self._derived = dc
+        snap.sof, snap.battle, snap.pit, snap.ir_change = dc[1], dc[2], dc[3], dc[4]
+        snap.incident_limit = m.incident_limit if m else 0
+        snap.track_key = m.track_key if m else ""
+        snap.car_key = m.car_path if m else ""
+        snap.my_sectors = self.my_sectors.state()
         pct = f.CarIdxLapDistPct
         snap.car_pct = None if pct is None else np.array(pct, dtype=np.float32)
         w, pl = snap.weather, snap.player
@@ -593,7 +626,8 @@ class TimingEngine:
                           irating=0, license="", is_me=(c == me))
         return CarRow(idx=c, number=d.number, name=d.name, abbrev=d.abbrev, team=d.team,
                       class_id=d.class_id, class_name=d.class_name, class_color=d.class_color,
-                      brand=d.brand, irating=d.irating, license=d.license, user_id=d.user_id, is_me=(c == me))
+                      brand=d.brand, irating=d.irating, license=d.license, user_id=d.user_id, is_me=(c == me),
+                      country=d.country, lic_color=d.lic_color, car_short=d.car_short)
 
     def _standings(self, f, m, t, me, stype, state):
         cars = self._drivers(m)
@@ -606,7 +640,12 @@ class TimingEngine:
         lap_done = f.CarIdxLapCompleted
         ipos = f.CarIdxPosition
         tires = f.CarIdxTireCompound
+        cflags = f.CarIdxSessionFlags
         rows = {c: self._make_row(c, m, me) for c in cars}
+        if cflags is not None:
+            for c, r in rows.items():
+                if c < len(cflags):
+                    r.flag_bits = int(cflags[c])
         for c, r in rows.items():
             r.last_lap = float(last[c]) if last is not None and last[c] > 0 else 0.0
             r.best_lap = float(best[c]) if best is not None and best[c] > 0 else 0.0

@@ -1,11 +1,36 @@
-LTH Overlays 0.5
+LTH Overlays 0.6
 ================
 
-In-house iRacing overlays for the LTH community. 27 widgets, all set up from one Control
-Center window: Standings, Relative, Battle analysis, Lap history, Delta bar, Session,
-Race engineer, Flags, Radar, Pit helper, Pit window, Incidents, Stint, Formation, Radio,
-Fuel, Dash, Inputs, G-force, Tyres, Car setting changes, Engine warnings, Track map,
-Weather, Rain Master, Connection and Performance.
+In-house iRacing overlays for the LTH community. 35 widgets, all set up from one Control
+Center window: Standings, Relative, Battle analysis, Lap history, Delta bar, Lap timer,
+Sectors, Session, Race engineer, Flags, Radar, Overtake alert, Rejoin indicator,
+Pit helper, Pit commands, Pit window, Incidents, Stint, Formation, Radio, Fuel, Dash,
+Inputs, G-force, Tyres, Car setting changes, Engine warnings, Track map, Flat track map,
+Weather, Rain Master, Garage cover, Stream chat, Connection and Performance.
+
+New in 0.6
+----------
+- Standings / Relative: country flags, coloured licences, car model, status badges
+  (PIT, OUT, BLUE, black flag...), optional column titles, projected iRating change,
+  a header and footer bar where you pick what to show (SOF, temperatures, time left...),
+  a coloured border while a flag is out, compact row heights. Narrower by default.
+- Outline (stroke) around every widget: Appearance > Outline, or per widget.
+- Inputs: speed, gear, a turning steering wheel and pedal percentages.
+- Pit commands: click to select all tyres, fuel to the finish, fast repair, windscreen.
+  No black box needed. Works only while iRacing is running on this PC.
+- Smooth track map (30 or 60 fps) and a new Flat track map.
+- Lap timer with your all-time personal best per car and track, Sectors (purple = new
+  best), Overtake alert (faster class from behind), Rejoin indicator, incident limit taken
+  from the session.
+- Telemetry page: session report (lap chart, consistency, fuel) and lap-against-lap
+  graphs (speed, pedals, steering, gear, time delta). Export a lap as a .lthlap file and
+  send it to a friend; they open it with "Import lap" and compare it with theirs.
+- Stream page: every widget as an OBS browser source, and a Stream chat widget for
+  Twitch and YouTube.
+- Drivers page: tag friends, teammates, rivals. Their names get your colour.
+- Hotkeys for every widget and for "Next profile". Each widget can be limited to
+  Practice / Qualifying / Race sessions. Garage cover hides your setup on stream.
+- 14 more fonts (33 in total).
 
 Start
 -----
@@ -41,7 +66,10 @@ Control Center
   plus your own. "Share" gives a short code to paste in Discord, or a .lthlayout file.
   Others use "Import layout" (or drop the file on the Control Center). It is added as a
   new profile and scaled to their screen.
-- Appearance: 10 themes (incl. LTH), 19 fonts, single colours and car class colours.
+- Appearance: 10 themes (incl. LTH), 33 fonts, outline, single colours and car class colours.
+- Drivers: tag friends / teammates / rivals (by iRacing ID or from the current session).
+- Telemetry: session report and lap comparison, import / export .lthlap files.
+- Stream: OBS browser source URLs (Copy button for each widget or the whole layout).
 - Hotkeys, General (startup, timing, track maps), Performance, Diagnostics.
 
 On screen
@@ -73,6 +101,27 @@ top 3 of every other class. Change both in Widgets > Standings.
 Track map: the outline is recorded from your first clean lap on a track and saved, so
 from then on it is there from the start. Until then cars are shown on a circle.
 
+OBS
+---
+Control Center > Stream > Enable. Then in OBS: Sources > + > Browser, paste a URL.
+"Whole layout" URLs: set the source to your monitor resolution (for example 1920 x 1080).
+The server listens on 127.0.0.1 only, so nothing outside this PC can reach it.
+Add ?demo=1 to a URL to see sample data while iRacing is closed.
+
+Stream chat
+-----------
+Widgets > Stream chat: enter your Twitch channel and / or your YouTube live link or
+@channel. Read-only, no login. Twitch uses its official anonymous chat. YouTube has no
+key-free official way, so it reads the same chat feed as the youtube.com pop-out chat;
+if YouTube changes it, the widget shows "YouTube: error" until the next update.
+
+Telemetry files
+---------------
+Your best lap per car and track is saved automatically in
+%APPDATA%\LTH Overlays\laps. Laps are recorded only for your own car while you drive
+(30 Hz, or 60 Hz in Telemetry settings). A .lthlap file is a small zip (about 40 KB)
+with the lap data. It contains no code.
+
 Windows "protected your PC" message
 -----------------------------------
 This build is not code-signed yet, so Windows SmartScreen may show
@@ -98,7 +147,9 @@ own refresh rate, and the process runs at "Below normal" priority so iRacing alw
 first. Inputs (and Dash / Delta bar with "Smooth" on) draw straight from telemetry at up
 to 60 fps; turn Smooth off or pick 30 fps on a slower PC.
 
-Fonts: Inter, Montserrat, Saira, Barlow, Oswald, Roboto Condensed, Archivo Narrow,
-IBM Plex Sans Condensed, Teko, Exo 2, Titillium Web, Kanit, Space Grotesk, Russo One,
-Rajdhani, Chakra Petch, JetBrains Mono (SIL Open Font License, see
-app\lth_overlays\data\fonts and app\lth_overlays\data\ui).
+Fonts: Inter, Geist, Manrope, Outfit, Sora, Figtree, Plus Jakarta Sans, Red Hat Display,
+Rubik, Montserrat, Space Grotesk, Kanit, Titillium Web, Saira, Barlow, Chivo, Oswald,
+Roboto Condensed, Archivo Narrow, IBM Plex Sans Condensed, Teko, Sofia Sans, Encode Sans,
+Exo 2, Russo One, Rajdhani, Chakra Petch, Oxanium, JetBrains Mono (SIL Open Font License,
+see app\lth_overlays\data\fonts and app\lth_overlays\data\ui).
+Country flags: flag-icons by Lipis (MIT). FlairID to country table based on irDashies (MIT).

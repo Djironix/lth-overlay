@@ -143,6 +143,7 @@ class WeatherWidget(OverlayWidget):
         p.setPen(Qt.PenStyle.NoPen)
         p.setBrush(pal.bg)
         p.drawRoundedRect(r, pal.radius, pal.radius)
+        self._drew_bg = True
         hh = self.paint_header(p, "WEATHER")
         if w is None or not w.valid:
             return

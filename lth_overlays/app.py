@@ -34,6 +34,8 @@ from .registry import BY_NAME, CATEGORIES, WIDGETS
 HOTKEY_EDIT = 0x4C54  # "LT"
 HOTKEY_HIDE = 0x4C55
 HOTKEY_RAIN = 0x4C56
+HOTKEY_PROFILE = 0x4C57
+HOTKEY_WIDGET0 = 0x4D00  # + valdiklio indeksas registre
 
 # Valdiklio atnaujinimo dažnis: kas kiek UI „tikų“ (1 tikas = 0,1 s) - iš registro
 RATES = {w.name: w.rate for w in WIDGETS}
@@ -102,7 +104,11 @@ class EngineThread(threading.Thread):
             tt = now_tt
             inputs = self.inputs_wanted
             eng.player.inputs_enabled = inputs
+            tel = self.config.data.get("telemetry") or {}
+            eng.recorder.enabled = bool(tel.get("record", True))
             min_gap = 0.0 if inputs else base_gap
+            if eng.recorder.enabled:  # telemetrijai reikia tankesnių kadrų (30 arba 60 Hz)
+                min_gap = min(min_gap, 0.0 if int(tel.get("hz", 30) or 30) >= 60 else 1 / 30 - 0.006)
             if self.forget_map:
                 self.forget_map = False
                 eng.trackmap.forget()
@@ -246,6 +252,13 @@ class OverlayApp(QObject):
         for spec in WIDGETS:
             self.widgets[spec.name] = spec.load()(self)
         self.engine = EngineThread(make_source, config)
+        from .chat import ChatHub
+        from .obs import ObsServer
+        self.chat = ChatHub()
+        from .pb import PersonalBests
+        self.pbs = PersonalBests(os.path.join(os.path.dirname(config.path), "pb.json")
+                                 if getattr(config, "path", None) else None)
+        self.obs = ObsServer(self)
 
     # ---- kontekstas valdikliams ----
     def screens(self) -> list:
@@ -310,6 +323,9 @@ class OverlayApp(QObject):
 
     def widget_changed(self, name):
         self.widgets[name].apply_settings()
+        ow = self.obs._inst.get(name)
+        if ow is not None:
+            ow.apply_settings()
         self.save_config_soon()
         self._update_inputs_flag()
         self._refresh_visibility(force=True)
@@ -320,6 +336,7 @@ class OverlayApp(QObject):
         self.theme = self.config.data.get("theme", "lth")
         for w in self.widgets.values():
             w.apply_settings()
+        self.obs.all_widgets_changed()
         self.save_config_soon()
         self._update_inputs_flag()
         self._refresh_visibility(force=True)
@@ -376,6 +393,7 @@ class OverlayApp(QObject):
         self.app.installNativeEventFilter(self._filter)
         self.register_hotkeys()
         self.app.aboutToQuit.connect(self._shutdown)
+        self.obs.apply()
 
     def next_rain_tip(self):
         w = self.widgets.get("rain_master")
@@ -397,17 +415,50 @@ class OverlayApp(QObject):
             self._last_show_req = now
             self.open_control_center()
 
+    def _hotkey_actions(self):
+        """[(veiksmas, id, funkcija)] - bendri ir kiekvieno valdiklio rodymo / slėpimo."""
+        out = [("edit", HOTKEY_EDIT, self.toggle_edit), ("toggle_all", HOTKEY_HIDE, self.toggle_hide_all),
+               ("rain_next", HOTKEY_RAIN, self.next_rain_tip), ("next_profile", HOTKEY_PROFILE, self.next_profile)]
+        for i, spec in enumerate(WIDGETS):
+            out.append((f"widget:{spec.name}", HOTKEY_WIDGET0 + i, lambda n=spec.name: self.toggle_widget(n)))
+        return out
+
     def register_hotkeys(self) -> dict:
         """(Per)registruoja karštuosius klavišus iš nustatymų. Grąžina {veiksmas: ar pavyko}."""
-        for hid in (HOTKEY_EDIT, HOTKEY_HIDE, HOTKEY_RAIN):
+        for hid in getattr(self, "_hk_ids", ()):
             win32.unregister_hotkey(hid)
         hk = self.config.data.get("hotkeys") or {}
-        out = {}
-        for action, hid in (("edit", HOTKEY_EDIT), ("toggle_all", HOTKEY_HIDE), ("rain_next", HOTKEY_RAIN)):
+        out, ids, cbs = {}, [], {win32.SHOW_REQUEST: self._show_request}
+        for action, hid, cb in self._hotkey_actions():
             parsed = win32.parse_hotkey(hk.get(action, ""))
-            out[action] = bool(parsed) and win32.register_hotkey(hid, *parsed)
+            if not parsed:
+                if not action.startswith("widget:"):
+                    out[action] = False
+                continue
+            ok = win32.register_hotkey(hid, *parsed)
+            out[action] = ok
+            if ok:
+                ids.append(hid)
+                cbs[hid] = cb
+        self._hk_ids = ids
+        if hasattr(self, "_filter"):
+            self._filter.callbacks = cbs
         self._hotkeys = out
         return out
+
+    def next_profile(self):
+        keys = list(self.config.data.get("profiles") or {})
+        if len(keys) < 2:
+            return
+        cur = self.config.profile_key
+        nxt = keys[(keys.index(cur) + 1) % len(keys)] if cur in keys else keys[0]
+        self.set_profile(nxt, manual=True)
+
+    def toggle_widget(self, name):
+        if name in self.widgets:
+            self.set_widget_visible(name, not self.config.widget(name).get("visible"))
+            if self.control is not None:
+                self.control.profile_changed()
 
     def quit(self):
         """Tikras išėjimas (tray / Control Center). Control Center tada nebesislepia į tray."""
@@ -418,7 +469,9 @@ class OverlayApp(QObject):
 
     def _shutdown(self):
         self.engine.stop_flag.set()
-        for hid in (HOTKEY_EDIT, HOTKEY_HIDE, HOTKEY_RAIN):
+        self.obs.stop()
+        self.chat.stop()
+        for hid in getattr(self, "_hk_ids", ()):
             win32.unregister_hotkey(hid)
         self.save_config()
 
@@ -443,6 +496,11 @@ class OverlayApp(QObject):
         if not snap.connected and self.editing:
             snap = self.preview_snapshot()
         if snap.connected:
+            if self._tick % 10 == 5:
+                self.pbs.observe(snap)
+                if (self.config.data.get("telemetry") or {}).get("auto_save_best", True):
+                    from .control.telemetry_page import autosave_best
+                    autosave_best(getattr(self.engine.timing, "recorder", None), self.__dict__.setdefault("_tel_state", {}))
             self._auto_profile(snap)
             self._apply_class_colors(snap)
         self._refresh_visibility(snap=snap)

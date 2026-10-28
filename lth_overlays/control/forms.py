@@ -8,13 +8,14 @@ from ..registry import BY_NAME, fields_for
 from .components import (Card, ColumnList, Combo, NumberField, Segmented, SettingRow, SliderField, Toggle, button,
                          label)
 
-GROUP_ORDER = ("Visibility", "Position & size", "Look", "Content", "Columns")
+GROUP_ORDER = ("Visibility", "Position & size", "Look", "Content", "Columns", "Header & footer")
 GROUP_SUB = {
     "Visibility": "When this widget is on screen.",
     "Position & size": "Exact pixels on your main screen. You can also drag it on screen or on the Layout page.",
     "Look": "Size, background and header.",
     "Content": "What the widget shows.",
     "Columns": "Turn columns on or off. Drag the handle to change the order.",
+    "Header & footer": "Extra information next to the title and in a bar under the table. Drag to reorder.",
 }
 
 
@@ -76,15 +77,18 @@ class WidgetForm(QWidget):
             w.changed.connect(lambda v, k=f.key: self._set(k, v))
             self._controls[f.key] = w
             return SettingRow(f.label, w, f.help)
-        if f.kind in ("columns", "checks"):
+        if f.kind in ("columns", "checks", "items"):
             enabled = c.get("columns" if f.kind == "columns" else f.key) or {}
-            order = c.get("order") if f.kind == "columns" else None
-            cl = ColumnList(f.spec, enabled, order, reorder=f.kind == "columns")
+            order = c.get("order") if f.kind == "columns" else (c.get(f.key + "_order") if f.kind == "items" else None)
+            cl = ColumnList(f.spec, enabled, order, reorder=f.kind in ("columns", "items"))
 
             def changed(en, order, kind=f.kind, key=f.key):
                 if kind == "columns":
                     self.cfg["columns"] = en
                     self.cfg["order"] = order
+                elif kind == "items":
+                    self.cfg[key] = en
+                    self.cfg[key + "_order"] = order
                 else:
                     self.cfg[key] = en
                 self.ctx.widget_changed(self.name)
@@ -93,10 +97,18 @@ class WidgetForm(QWidget):
             v = QVBoxLayout(box)
             v.setContentsMargins(0, 0, 0, 0)
             v.setSpacing(6)
-            if f.kind == "checks":
+            if f.kind in ("checks", "items"):
                 v.addWidget(label(f.label, "h3"))
+                if f.help:
+                    v.addWidget(label(f.help, "faint", wrap=True))
             v.addWidget(cl)
             return box
+        if f.kind == "color":
+            from .components import ColorButton
+            b = ColorButton(str(val or f.default or "#ffffff"))
+            b.changed.connect(lambda v, k=f.key: self._set(k, v))
+            self._controls[f.key] = b
+            return SettingRow(f.label, b, f.help)
         # text
         e = QLineEdit(str(val or ""))
         e.setMinimumWidth(240)
