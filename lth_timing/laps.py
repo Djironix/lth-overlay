@@ -173,3 +173,34 @@ def project_irating(cars) -> dict:
         rows = [(idx, ir, i + 1) for i, (idx, ir, _) in enumerate(rows)]
         out.update(irating_changes(rows))
     return out
+
+
+# ---------------------------------------------------------------- likę ratai lenktynėse
+def laps_left_timed(time_remain: float, my_pct: float, my_lap: float,
+                    leader_pct: float | None = None, leader_lap: float | None = None) -> float | None:
+    """Kiek ratų (su dalimi) dar nuvažiuosiu laiko lenktynėse.
+
+    Lenktynės baigiasi, kai bendras lyderis kerta liniją pasibaigus laikui; aš baigiu, kai po to
+    pirmą kartą kertu liniją. Kai lyderio duomenų nėra (arba lyderis - aš), skaičiuojama mano tempu."""
+    if not (my_lap and my_lap > 0) or time_remain is None or time_remain > 1e6:
+        return None
+    t = max(0.0, float(time_remain))
+    p = float(my_pct) % 1.0
+    if leader_lap and leader_lap > 0 and leader_pct is not None:
+        pl = float(leader_pct) % 1.0
+        k_l = max(1, math.ceil(t / leader_lap + pl - 1e-9))
+        t_end = (k_l - pl) * leader_lap  # kada lyderis gaus finišo vėliavą
+    else:
+        t_end = t
+    k = max(1, math.ceil(t_end / my_lap + p - 1e-9))
+    return k - p
+
+
+def clean_fuel_avg(hist) -> float | None:
+    """Vidutinės kuro sąnaudos per ratą be „geltonų“ / lėtų ratų (jie gerokai mažesni už medianą)."""
+    vals = [float(x) for x in hist if x and x > 0]
+    if not vals:
+        return None
+    med = sorted(vals)[len(vals) // 2]
+    keep = [v for v in vals if v >= 0.85 * med]
+    return sum(keep) / len(keep) if keep else None

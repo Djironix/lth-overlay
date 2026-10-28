@@ -96,6 +96,7 @@ class EngineThread(threading.Thread):
         msgs = []
         idle = True
         announced = False
+        driving = False
         self.cpu_s = 0.0
         tt = time.thread_time()
         while not self.stop_flag.is_set():
@@ -107,7 +108,7 @@ class EngineThread(threading.Thread):
             tel = self.config.data.get("telemetry") or {}
             eng.recorder.enabled = bool(tel.get("record", True))
             min_gap = 0.0 if inputs else base_gap
-            if eng.recorder.enabled:  # telemetrijai reikia tankesnių kadrų (30 arba 60 Hz)
+            if eng.recorder.enabled and driving:  # telemetrijai reikia tankesnių kadrų (30 arba 60 Hz)
                 min_gap = min(min_gap, 0.0 if int(tel.get("hz", 30) or 30) >= 60 else 1 / 30 - 0.006)
             if self.forget_map:
                 self.forget_map = False
@@ -129,6 +130,7 @@ class EngineThread(threading.Thread):
             idle = False
             self.connected = True
             eng.set_session(src.session)
+            driving = bool(f.IsOnTrack) and not bool(f.IsReplayPlaying)
             t0 = time.perf_counter()
             eng.update(f)
             dt = (time.perf_counter() - t0) * 1e6
@@ -242,6 +244,7 @@ class OverlayApp(QObject):
         self.perf = {}
         self.perf_hist = []  # (cpu, ram, fps) kas sekundę - Control Center grafikui
         self.editing = False
+        self.idle = False
         self.hidden_all = False
         self.control = None  # ControlCenter (sukuriamas pirmą kartą atidarant)
         self._preview = None
@@ -252,6 +255,7 @@ class OverlayApp(QObject):
         for spec in WIDGETS:
             self.widgets[spec.name] = spec.load()(self)
         self.engine = EngineThread(make_source, config)
+        self._install_gc()
         from .chat import ChatHub
         from .obs import ObsServer
         self.chat = ChatHub()
@@ -259,6 +263,22 @@ class OverlayApp(QObject):
         self.pbs = PersonalBests(os.path.join(os.path.dirname(config.path), "pb.json")
                                  if getattr(config, "path", None) else None)
         self.obs = ObsServer(self)
+
+    def _install_gc(self):
+        """Šiukšlių surinkimas tik UI gijoje. Automatinis Python GC gali pasileisti bet kurioje gijoje
+        (variklis, OBS serveris, chat) ir ten sunaikinti Qt langus - tai nulaužia Qt. Todėl automatinis
+        GC išjungiamas, o ciklai renkami laikmačiu UI gijoje (be to - jokių atsitiktinių pauzių piešiant)."""
+        import gc
+        gc.disable()
+        self._gc_n = 0
+
+        def collect():
+            self._gc_n += 1
+            gc.collect(2 if self._gc_n % 60 == 0 else (1 if self._gc_n % 10 == 0 else 0))
+        self._gc_timer = QTimer(self)
+        self._gc_timer.setTimerType(Qt.TimerType.CoarseTimer)
+        self._gc_timer.timeout.connect(collect)
+        self._gc_timer.start(1000)
 
     # ---- kontekstas valdikliams ----
     def screens(self) -> list:
@@ -493,6 +513,10 @@ class OverlayApp(QObject):
             del self.perf_hist[:-120]
             if self.control is not None and self.control.isVisible():
                 self.control.tick(snap)
+        pl = snap.player
+        # stovi garaže / boksuose / po finišo: greiti valdikliai (Inputs, žemėlapis) sulėtinami
+        self.idle = bool(snap.connected and not snap.replay and not snap.watching and not self.editing
+                         and (not snap.on_track or (pl is not None and pl.valid and pl.speed < 0.5)))
         if not snap.connected and self.editing:
             snap = self.preview_snapshot()
         if snap.connected:
@@ -500,7 +524,9 @@ class OverlayApp(QObject):
                 self.pbs.observe(snap)
                 if (self.config.data.get("telemetry") or {}).get("auto_save_best", True):
                     from .control.telemetry_page import autosave_best
-                    autosave_best(getattr(self.engine.timing, "recorder", None), self.__dict__.setdefault("_tel_state", {}))
+                    tm = getattr(self.engine.timing, "trackmap", None)
+                    autosave_best(getattr(self.engine.timing, "recorder", None), self.__dict__.setdefault("_tel_state", {}),
+                                  tm.points if tm is not None else None)
             self._auto_profile(snap)
             self._apply_class_colors(snap)
         self._refresh_visibility(snap=snap)
@@ -689,6 +715,11 @@ class OverlayApp(QObject):
         return exe if os.path.exists(exe) else None
 
     def set_autostart(self, on) -> bool:
+        if win32.is_packaged():  # Store versija: paleidimą su Windows įjungia Windows nustatymuose
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+            QDesktopServices.openUrl(QUrl("ms-settings:startupapps"))
+            return False
         exe = self._launcher_exe()
         ok = win32.set_autostart(bool(on), exe) if (exe or not on) else False
         self.config.data["autostart"] = bool(on) and ok
@@ -703,12 +734,9 @@ class OverlayApp(QObject):
         d = self.config.data
         exe = self._launcher_exe()
         win32.migrate_autostart(exe)  # senas .vbs Startup aplanke -> registro Run įrašas
-        if d.get("autostart_done") or not getattr(self, "live", True):
-            return
-        d["autostart_done"] = True
-        if d.get("autostart", True) and exe:
-            win32.set_autostart(True, exe)
-        self.save_config()
+        # v0.6.1: įrašas į Windows paleidimą daromas tik vartotojui sutikus (tutorialo paskutinis žingsnis
+        # arba General). Tylus „persistence“ pirmo paleidimo metu - viena iš antivirusų euristikų.
+        return
 
     def save_preview(self):
         """Išsaugo visų valdiklių vaizdą (demo duomenys) į %APPDATA%\\LTH Overlays\\preview.png."""

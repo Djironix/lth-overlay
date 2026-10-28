@@ -315,6 +315,10 @@ class TableWidget(OverlayWidget):
                 fc = QColor(self.pal.accent)
                 fc.setAlpha(36)
                 p.fillRect(row, fc)
+            if "blue" in flags:  # mėlyna vėliava: ryški mėlyna eilutė su juosta kairėje
+                bc = QColor(30, 110, 255, 95)
+                p.fillRect(row, bc)
+                p.fillRect(QRectF(0, y, 4, rh), QColor(60, 140, 255))
             car_i += 1
             for cell in cells:
                 key, text, fg, bg, align, font = cell

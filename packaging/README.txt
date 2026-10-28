@@ -1,5 +1,5 @@
-LTH Overlays 0.6
-================
+LTH Overlays 0.6.1
+==================
 
 In-house iRacing overlays for the LTH community. 35 widgets, all set up from one Control
 Center window: Standings, Relative, Battle analysis, Lap history, Delta bar, Lap timer,
@@ -7,6 +7,28 @@ Sectors, Session, Race engineer, Flags, Radar, Overtake alert, Rejoin indicator,
 Pit helper, Pit commands, Pit window, Incidents, Stint, Formation, Radio, Fuel, Dash,
 Inputs, G-force, Tyres, Car setting changes, Engine warnings, Track map, Flat track map,
 Weather, Rain Master, Garage cover, Stream chat, Connection and Performance.
+
+New in 0.6.1
+------------
+- Fix: in practice and qualifying, drivers who went back to the garage dropped to the bottom
+  of Standings (iRacing clears their best lap in telemetry). Their best lap is now kept.
+- Fix: telemetry no longer drops the lap being recorded when iRacing updates session info.
+- Less CPU: smooth widgets slow down to 12 fps while you stand still (garage, pits, after the
+  finish), Inputs and track maps draw faster, Eco mode (Performance page) caps all smooth
+  widgets at 30 or 20 fps, and the Performance page shows what each widget costs.
+- Fuel strategy widget: stops needed, pit window (earliest / latest lap), fuel to add, and
+  how much to save per lap to make it with one stop less. In timed races the laps to go
+  follow the overall leader's pace; caution laps are left out of fuel per lap.
+- Relative: Last lap and Best lap columns. Column titles are on by default.
+- Blue flags: blue rows in Standings / Relative, blue ring on track maps. Friends' colours
+  on track maps.
+- Inputs: optional ABS light.
+- Telemetry: separate graphs for throttle and brake, one colour per lap, more space
+  between graphs, and a track map that shows where you are on the lap (green / red where
+  lap B gains or loses). Exported laps include the track outline.
+- OBS link and Copy button on every widget's page.
+- "Start with Windows" is now chosen in the tutorial instead of being switched on
+  silently on the first run.
 
 New in 0.6
 ----------
@@ -38,9 +60,9 @@ Start
    Do not run the .exe from inside the zip.
 2. Run "LTH Overlays.exe". The Control Center opens with a short tutorial (pick a
    starting layout: Simple, Single monitor or Triple monitor) and the LTH icon appears
-   next to the clock. On the first run the app adds itself to the Windows startup list, so it
-   starts quietly with Windows and sleeps until iRacing is running.
-   Turn this off in Control Center > General > Start with Windows.
+   next to the clock. The last tutorial step asks whether to start with Windows (then it
+   starts quietly and sleeps until iRacing is running). Change it any time in
+   Control Center > General > Start with Windows.
 3. Start iRacing. Overlays appear whenever iRacing is running: on track, in a replay,
    or spectating. Closing the Control Center does not stop the overlays. Click the
    L icon to open it again. "Quit LTH Overlays" is in the tray menu and at the bottom

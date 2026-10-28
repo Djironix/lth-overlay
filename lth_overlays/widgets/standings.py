@@ -227,6 +227,8 @@ class StandingsWidget(TableWidget):
             elif k == "tire":
                 cells.append(Cell(k, "W" if r.tire == 1 else "", fg="blue", align=CENTER, font="tiny"))
         flags = ("me",) if r.is_me else (("friend",) if self._friends.get(r.user_id) else ())
+        if race and r.flag_bits & 0x20 and c.get("blue_rows", True):
+            flags = flags + ("blue",)
         return ("car", tuple(cells), flags)
 
     # ---------------- piešimas ----------------

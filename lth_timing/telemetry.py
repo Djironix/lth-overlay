@@ -31,6 +31,7 @@ class Lap:
     meta: dict = field(default_factory=dict)  # track, track_key, car, driver, date, position, fuel_used...
     grid: np.ndarray | None = None  # rato dalis 0..1 (N)
     data: dict = field(default_factory=dict)  # kanalas -> np.ndarray (N)
+    track_map: np.ndarray | None = None  # (400, 2) trasos kontūras (jei buvo), kad draugas matytų žemėlapį
 
     @property
     def has_trace(self) -> bool:
@@ -72,13 +73,16 @@ class LapRecorder:
         self._fuel0 = None
 
     def set_session(self, meta: dict, track_m: float):
-        if meta.get("track_key") != self.meta.get("track_key") or meta.get("car") != self.meta.get("car"):
-            self.laps = []
-            self.version += 1
+        """Kviečiama su kiekvienu sesijos YAML atnaujinimu (iRacing jį atnaujina dažnai, pvz. po kiekvieno
+        rato) - einamasis ratas nutraukiamas tik pasikeitus trasai ar mašinai."""
+        changed = meta.get("track_key") != self.meta.get("track_key") or meta.get("car") != self.meta.get("car")
         self.meta = dict(meta)
         self.track_m = max(500.0, float(track_m or 4000.0))
-        self._reset_lap()
-        self._prev_pct = None
+        if changed:
+            self.laps = []
+            self.version += 1
+            self._reset_lap()
+            self._prev_pct = None
 
     def reset(self):
         self._reset_lap()
@@ -192,12 +196,15 @@ def _num(x, default=math.nan) -> float:
 
 
 # ---------------------------------------------------------------- failai
-def save_lap(path: str, lap: Lap):
+def save_lap(path: str, lap: Lap, track_map=None):
     meta = dict(lap.meta, number=lap.number, lap_time=lap.lap_time, valid=lap.valid, pit=lap.pit, format=FORMAT,
                 app="LTH Overlays")
     buf = io.BytesIO()
     arrays = {"grid": lap.grid.astype(np.float32)}
     arrays.update({k: np.asarray(v, dtype=np.float32) for k, v in lap.data.items() if k in CHANNELS})
+    tmap = track_map if track_map is not None else lap.track_map
+    if tmap is not None and np.asarray(tmap).ndim == 2 and np.asarray(tmap).shape[1] == 2:
+        arrays["map"] = np.asarray(tmap, dtype=np.float32)
     np.savez_compressed(buf, **arrays)
     with zipfile.ZipFile(path, "w", zipfile.ZIP_STORED) as z:
         z.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
@@ -213,11 +220,15 @@ def load_lap(path: str) -> Lap:
     with np.load(io.BytesIO(raw), allow_pickle=False) as npz:
         grid = np.asarray(npz["grid"], dtype=np.float32)
         data = {k: np.asarray(npz[k], dtype=np.float32) for k in CHANNELS if k in npz.files}
+        tmap = np.asarray(npz["map"], dtype=np.float32) if "map" in npz.files else None
+    if tmap is not None and (tmap.ndim != 2 or tmap.shape[1] != 2 or not (10 <= len(tmap) <= 5000)):
+        tmap = None
     if grid.ndim != 1 or len(grid) < 10 or any(len(v) != len(grid) for v in data.values()) or "time" not in data:
         raise ValueError("not an LTH lap file")
     meta["imported"] = True
     return Lap(number=int(meta.get("number", 0) or 0), lap_time=float(meta.get("lap_time", 0) or 0),
-               valid=bool(meta.get("valid", True)), pit=bool(meta.get("pit", False)), meta=meta, grid=grid, data=data)
+               valid=bool(meta.get("valid", True)), pit=bool(meta.get("pit", False)), meta=meta, grid=grid, data=data,
+               track_map=tmap)
 
 
 def save_csv(path: str, lap: Lap, track_m: float | None = None):

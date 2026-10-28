@@ -28,6 +28,46 @@ Atnaujinta: 2026-10-28 · Dabartinė versija: **v0.6.0** · Toliau: Windows pati
 
 ---
 
+## 0.0a v0.6.1 — pataisymai po pirmo bandymo
+
+- **Standings practice / qualify:**
+  - iRacing grįžus į garažą nunulina `CarIdxBestLapTime`, `LastLapTime` ir `LapCompleted`;
+  - variklis laiko geriausias matytas reikšmes (`best_seen`, `last_seen`, `laps_seen`) ir naudoja YAML `FastestTime`.
+- **Telemetrija:** `LapRecorder.set_session` nebenutraukia rato kiekvieno YAML atnaujinimo metu.
+- **Avarijos pataisymas:**
+  - automatinis GC išjungtas, `gc.collect` vyksta UI gijoje kas 1 s;
+  - priežastis: GC kitoje gijoje (OBS, chat) naikino Qt langus, ir programa lūždavo.
+- **CPU:**
+  - `ctx.idle` (stovint greitas kelias 12 Hz);
+  - Eco `fps_cap`;
+  - kontūras talpykloje;
+  - track map taškai kaip sprite;
+  - Inputs nepiešia, kai niekas nesikeičia;
+  - Lap timer 10 Hz;
+  - track map 30 fps;
+  - telemetrijos 30 Hz kadrai tik vairuojant;
+  - Performance puslapyje matyti, kiek CPU naudoja kiekvienas valdiklis.
+  - 10 valdiklių rinkinys: 25,8 % → 15,7 % vieno branduolio (sandbox).
+- **Fuel strategy** (`car.fuel_plan`, testai su rankiniu skaičiavimu):
+  - laiko lenktynių likę ratai pagal bendro lyderio tempą (`laps.laps_left_timed`);
+  - kuras per ratą be geltonų ratų (`clean_fuel_avg`);
+  - tempas skaičiuojamas iš paskutinių švarių ratų medianos.
+- **Relative:** stulpeliai Last ir Best; stulpelių antraštės įjungtos numatytai (config v8 migracija).
+- **Mėlynos vėliavos:**
+  - mėlynos eilutės ir žiedai žemėlapyje;
+  - kitų mašinų mėlyna slopinama per pace ir pirmas 10 s;
+  - draugų spalvos žemėlapyje.
+- **Inputs:** ABS lemputė.
+- **Telemetrija (UI):**
+  - atskiri Throttle ir Brake grafikai, kiekvienas ratas savo spalva, didesni tarpai;
+  - `TrackMini` žemėlapis su žymekliu ir žalia / raudona spalva pagal tai, kur B laimi / pralaimi;
+  - `.lthlap` dabar su trasos kontūru.
+- **OBS:** nuoroda valdiklio puslapyje.
+- **Antivirusai:**
+  - „Start with Windows“ tik su sutikimu tutorialo pabaigoje;
+  - MSIX paruoštas Store (StartupTask su `--autostart`, LTH logotipai, versija iš `VERSION`);
+  - `win32.is_packaged()`.
+
 ## 0.0 v0.6.0 — kas padaryta
 
 Tyrimas: `docs/research-v0.6.md` (RaceLab, irDashies, iOverlay, Kapps, bendruomenės nuomonė).

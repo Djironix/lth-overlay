@@ -71,6 +71,118 @@ class FuelWidget(PanelWidget):
             y = self.kv(p, y, label, value, col)
 
 
+def fuel_plan(fuel_l, fpl, laps_left, tank, margin_laps, lap_no, lap_pct, max_save=0.12):
+    """Kuro strategija. Grąžina dict arba None, jei trūksta duomenų.
+
+    laps_left - kiek ratų (su dalimi) dar nuvažiuosiu; margin_laps - atsarga ratais."""
+    if not (fpl and fpl > 0) or laps_left is None or not math.isfinite(fuel_l):
+        return None
+    laps_fuel = fuel_l / fpl  # kiek ratų užteks nuo dabar
+    need = (laps_left + margin_laps) * fpl
+    deficit = need - fuel_l
+    out = {"laps_fuel": laps_fuel, "laps_left": laps_left, "need": need, "deficit": deficit, "fpl": fpl}
+    to_line = 1.0 - (lap_pct % 1.0)  # iki artimiausio linijos kirtimo
+    if deficit <= 0:
+        out.update(stops=0, spare=laps_fuel - laps_left, allowed=fuel_l / (laps_left + margin_laps))
+        return out
+    stops = math.ceil(deficit / tank - 1e-9) if tank and tank > 0 else 1
+    out["stops"] = stops
+    # vėliausias ratas sustoti: kiek linijos kirtimų dar pasieksiu su atsarga
+    usable = laps_fuel - margin_laps
+    k_last = math.floor(usable - to_line + 1e-9) + 1 if usable >= to_line else 0
+    out["latest_lap"] = lap_no + k_last - 1 if k_last >= 1 else None  # sustoti šio rato pabaigoje
+    if stops == 1 and tank and tank > 0:
+        # anksčiausias: po sustojimo likęs atstumas turi tilpti į pilną baką
+        d_min = laps_left + margin_laps - tank / fpl
+        j = max(1, math.ceil(d_min - to_line + 1e-9) + 1)
+        out["earliest_lap"] = lap_no + j - 1
+    # taupymas: kiek reikėtų mažiau per ratą, kad užtektų vienu sustojimu mažiau
+    budget = fuel_l + (stops - 1) * (tank or 0.0)
+    target = budget / (laps_left + margin_laps)
+    save = 1.0 - target / fpl
+    out["save_target"] = target
+    out["save_pct"] = save
+    out["save_ok"] = 0 < save <= max_save
+    return out
+
+
+class FuelStrategyWidget(PanelWidget):
+    """Kada sustoti, kiek pilti ir kiek reikia taupyti, kad užtektų vienu sustojimu mažiau."""
+    NAME = "fuel_strategy"
+    TITLE = "Fuel strategy"
+    MIN_WIDTH = 220
+
+    def content_key(self, snap):
+        p = snap.player
+        if p is None or not p.valid or not math.isfinite(p.fuel_l):
+            self._view = None
+            return None
+        gal = self.cfg.get("unit", "l") == "gal"
+        k, u = (L_TO_GAL, " gal") if gal else (1.0, " l")
+        race = snap.session_type == "race"
+        margin = float(self.cfg.get("margin", 0.5) or 0.0)
+        max_save = float(self.cfg.get("max_save", 0.12) or 0.12)
+        lines, status = [], ("", "dim")
+        plan = fuel_plan(p.fuel_l, p.fuel_per_lap, p.race_laps_left if race else None, p.fuel_max_l, margin,
+                         p.lap_no, p.lap_pct, max_save)
+        if not p.fuel_per_lap:
+            status = ("MEASURING", "dim")
+            lines.append(("Per lap", "drive a clean lap", "dim"))
+        elif plan is None:
+            status = ("RACE ONLY", "dim")
+            lines.append(("Per lap", f"{p.fuel_per_lap * k:.2f}{u}", "text"))
+            lines.append(("Laps of fuel", f"{p.fuel_l / p.fuel_per_lap:.1f}", "text"))
+        else:
+            lines.append(("Laps to go", f"{plan['laps_left']:.1f}", "text"))
+            lines.append(("Laps of fuel", f"{plan['laps_fuel']:.1f}   ({p.fuel_per_lap * k:.2f}{u}/lap)", "text"))
+            if plan["stops"] == 0:
+                status = ("NO STOP NEEDED", "good")
+                lines.append(("Spare", f"{plan['spare']:.1f} laps", "good"))
+                lines.append(("You can use", f"{plan['allowed'] * k:.2f}{u}/lap", "text"))
+            else:
+                n = plan["stops"]
+                status = (f"{n} STOP{'S' if n > 1 else ''}", "yellow")
+                lines.append(("Fuel to add", f"+{plan['deficit'] * k:.1f}{u}" + (" in total" if n > 1 else ""),
+                              "yellow"))
+                lo, hi = plan.get("earliest_lap"), plan.get("latest_lap")
+                if hi is None:
+                    lines.append(("Pit", "this lap!", "bad"))
+                elif lo is not None and lo > hi:
+                    lines.append(("Pit window", "closed - one more stop", "bad"))
+                elif lo is not None:
+                    lines.append(("Pit window", f"lap {lo} - {hi}" if lo < hi else f"lap {hi}", "text"))
+                else:
+                    lines.append(("Pit by", f"end of lap {hi}", "text"))
+                if plan["save_ok"]:
+                    fewer = "no stop" if n == 1 else f"{n - 1} stop{'s' if n > 2 else ''}"
+                    lines.append((f"For {fewer}", f"{plan['save_target'] * k:.2f}{u}/lap  (save "
+                                  f"{plan['save_pct'] * 100:.0f}%)", "purple"))
+                elif plan["save_pct"] > 0:
+                    lines.append(("Saving", f"would need {plan['save_pct'] * 100:.0f}% - not realistic", "dim"))
+        self._view = (status, tuple(lines))
+        return (self._view, self.width())
+
+    def desired_height(self) -> int:
+        n = len(self._view[1]) if self._view else 1
+        return self.body_height(n + 1.4)
+
+    def paint_content(self, p: QPainter):
+        if self._view is None:
+            if self.editing:
+                self.card(p, "FUEL STRATEGY")
+            return
+        (status, scol), lines = self._view
+        y = self.card(p, "FUEL STRATEGY")
+        x0 = self.pad() * 1.4
+        w = self.width() - 2 * x0
+        lh = self.lh()
+        p.setPen(getattr(self.pal, scol))
+        self.draw_text(p, QRectF(x0, y, w, lh * 1.2), status, "mid")
+        y += lh * 1.4
+        for label, value, col in lines:
+            y = self.kv(p, y, label, value, col)
+
+
 class DashWidget(PanelWidget):
     NAME = "dash"
     TITLE = "Dash"
@@ -180,10 +292,16 @@ class InputsWidget(PanelWidget):
         arr = pl.input_trace(n)
         if arr is None:
             return False
-        tr = dict(zip(self.KEYS, arr))
         f = timing.frame
+        speed, gear = round(float(f.get("Speed", 0.0) or 0.0), 1), int(f.get("Gear", 0) or 0)
+        last = getattr(self, "_last_arr", None)
+        if (last is not None and last[0].shape == arr.shape and last[1] == (speed, gear)
+                and np.array_equal(last[0], arr)):
+            return False  # stovint niekas nesikeičia - nepiešiam iš naujo
+        self._last_arr = (arr.copy(), (speed, gear))
+        tr = dict(zip(self.KEYS, arr))
         self._view = (tr, float(arr[0, -1]), float(arr[1, -1]), float(arr[2, -1]), bool(arr[4, -1] > 0.5),
-                      float(f.get("Speed", 0.0) or 0.0), int(f.get("Gear", 0) or 0), float(arr[3, -1]))
+                      speed, gear, float(arr[3, -1]))
         return True
 
     def desired_height(self) -> int:
@@ -205,12 +323,14 @@ class InputsWidget(PanelWidget):
             bw = max(bw, self.text_width("100", "tiny") + 2)
         nbars = 3 if c.get("show_clutch") else 2
         wsz = (r.height() - 2 * pad) if wheel else 0
-        right = (bw * nbars + pad * nbars if bars else 0) + (wsz + pad if wheel else 0)
+        show_abs = bool(c.get("show_abs", False))
+        asz = max(self.text_width("ABS", "tiny") + 8, (r.height() - 2 * pad) * 0.42) if show_abs else 0
+        right = (bw * nbars + pad * nbars if bars else 0) + (wsz + pad if wheel else 0) + (asz + pad if show_abs else 0)
         lab_h = self.lh() * 0.75 if pct else 0
         graph = QRectF(pad, pad, max(10.0, r.width() - 2 * pad - right), r.height() - 2 * pad)
         bar_top = graph.top() + lab_h
         # fonas, tinklelis ir juostų pagrindai nesikeičia - paruošiami vieną kartą
-        bkey = (self.width(), self.height(), bars, nbars, pct, wheel, id(pal), self.devicePixelRatioF())
+        bkey = (self.width(), self.height(), bars, nbars, pct, wheel, show_abs, id(pal), self.devicePixelRatioF())
         if getattr(self, "_bg_key", None) != bkey:
             from PySide6.QtGui import QPixmap
             dpr = self.devicePixelRatioF()
@@ -233,6 +353,15 @@ class InputsWidget(PanelWidget):
                 for _ in range(nbars):
                     q.drawRoundedRect(QRectF(x, bar_top, bw, graph.bottom() - bar_top), 2, 2)
                     x += bw + pad
+            if wheel:  # vairo lankas nesisuka - piešiamas vieną kartą
+                wr = QRectF(r.width() - pad - wsz, pad, wsz, wsz)
+                rad = wr.width() / 2 - 2
+                ring = max(3.0, rad * 0.16)
+                rim = QColor(pal.text)
+                rim.setAlpha(70)
+                q.setPen(QPen(rim, ring))
+                q.setBrush(Qt.BrushStyle.NoBrush)
+                q.drawEllipse(wr.center(), rad - ring / 2, rad - ring / 2)
             q.end()
             self._bg_pm, self._bg_key = pm, bkey
         p.drawPixmap(0, 0, self._bg_pm)
@@ -240,12 +369,12 @@ class InputsWidget(PanelWidget):
 
         pen_w = max(1.5, self._scale() * 1.8)
 
-        def trace(vals, color, center=False, scale=1.0):
+        def trace(vals, color, center=False, scale=1.0, aa=True):
             if vals is None or len(vals) < 2:
                 return
             n = len(vals)
-            # ne daugiau taškų nei pikselių: pigu piešti net 60 kartų per sekundę
-            m = int(min(n, max(2, graph.width() / 3.0)))
+            # taškas kas ~4 px: pigu piešti net 60 kartų per sekundę, akimi skirtumo nėra
+            m = int(min(n, max(2, graph.width() / 4.0)))
             idx = np.linspace(0, n - 1, m).astype(np.int32)
             v = vals[idx]
             v = np.clip(v * scale, -1, 1) if center else np.clip(v, 0, 1)
@@ -254,10 +383,14 @@ class InputsWidget(PanelWidget):
             poly = QPolygonF(list(map(QPointF, xs.tolist(), ys.tolist())))
             p.setPen(QPen(color, pen_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap, Qt.PenJoinStyle.BevelJoin))
             p.setBrush(Qt.BrushStyle.NoBrush)
+            if not aa:
+                p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
             p.drawPolyline(poly)
+            if not aa:
+                p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
         if self.cfg.get("show_steering", True):
-            trace(tr.get("steer"), QColor(200, 200, 210, 150), center=True, scale=1 / 2.5)
+            trace(tr.get("steer"), QColor(200, 200, 210, 150), center=True, scale=1 / 2.5, aa=False)
         if self.cfg.get("show_clutch"):
             trace(tr.get("clutch"), pal.blue)
         trace(tr.get("brake"), pal.yellow if abs_on else pal.bad)
@@ -278,6 +411,14 @@ class InputsWidget(PanelWidget):
                     self.draw_text(p, QRectF(x - 4, graph.top(), bw + 8, lab_h), f"{v * 100:.0f}", "tiny", "c")
                     p.setPen(Qt.PenStyle.NoPen)
                 x += bw + pad
+        if show_abs:  # ABS lemputė: dega, kol ABS mažina stabdymo jėgą (BrakeABSactive)
+            ax = graph.right() + pad + ((bw + pad) * nbars if bars else 0)
+            ar = QRectF(ax, graph.center().y() - asz / 2, asz, asz)
+            p.setPen(Qt.PenStyle.NoPen)
+            p.setBrush(pal.yellow if abs_on else pal.track)
+            p.drawRoundedRect(ar, 3, 3)
+            p.setPen(QColor(20, 20, 20) if abs_on else pal.dim)
+            self.draw_text(p, ar, "ABS", "tiny", "c")
         if wheel:
             self._paint_wheel(p, QRectF(r.width() - pad - wsz, pad, wsz, wsz), steer, gear, speed)
 
@@ -288,12 +429,8 @@ class InputsWidget(PanelWidget):
         c = rect.center()
         rad = rect.width() / 2 - 2
         ring = max(3.0, rad * 0.16)
-        rim = QColor(pal.text)
-        rim.setAlpha(70)
-        p.setPen(QPen(rim, ring))
         p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawEllipse(c, rad - ring / 2, rad - ring / 2)
-        # viršaus žymė (12 valanda) pasukta pagal vairą; iRacing: teigiamas = į kairę
+        # lankas - fono paveikslėlyje; čia tik besisukanti viršaus žymė (12 valanda) pasukta pagal vairą; iRacing: teigiamas = į kairę
         a = -steer
         p.setPen(QPen(pal.accent, ring + 0.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
         span = 26  # laipsniais

@@ -33,9 +33,9 @@ import numpy as np
 
 from .frame import (MAX_CARS, STATE_CHECKERED, STATE_RACING, SURF_NOT_IN_WORLD,
                     SURF_OFF_TRACK, Frame)
-from .laps import SectorTracker, project_irating
+from .laps import SectorTracker, laps_left_timed, project_irating
 from .telemetry import LapRecorder
-from .player import PlayerTracker
+from .player import BLUE_GRACE_S, FLAG_BLUE, PlayerTracker
 from .sessioninfo import SessionModel
 from .rain_tips import RainCaller
 from .trackmap import TrackMap
@@ -195,6 +195,11 @@ class TimingEngine:
         self.surface = np.full(n, SURF_NOT_IN_WORLD, dtype=np.int64)
         self.pit_stops = np.zeros(n, dtype=np.int64)
         self.pit_exit_lap = np.full(n, -1, dtype=np.int64)
+        # iRacing nuresetina CarIdxBestLapTime / LastLapTime / LapCompleted, kai mašina grįžta į garažą
+        # (practice / qualify) - laikom, ką jau matėm šioje sesijoje
+        self.best_seen = np.zeros(n)
+        self.last_seen = np.zeros(n)
+        self.laps_seen = np.zeros(n, dtype=np.int64)
         self.start_class_pos = {}
         self.lap_pos = {}  # idx -> (lap, pos) paskutinio rato pradžioje
         self.pos_change_lap = {}
@@ -503,6 +508,8 @@ class TimingEngine:
         snap.relative = self._relative(f, t, me, rows, snap)
         race = snap.session_type == "race"
         snap.player = self.player.state(f, t, snap.laps_remain, snap.time_remain, race)
+        if race:
+            self._race_laps_left(snap, rows, f)
         tm = self.trackmap
         snap.track_map = {"points": tm.points, "recording": tm.recording, "progress": tm.progress}
         snap.track_name = m.track_name if m else ""
@@ -527,6 +534,27 @@ class TimingEngine:
             snap.rain_call = self.rain.update(t, w.wetness, w.trend, w.precipitation, pl.tyre_compound,
                                               pl.on_pit_road, close)
         return snap
+
+    def _race_laps_left(self, snap, rows, f):
+        """Laiko lenktynėse likę ratai pagal bendro lyderio tempą (ne savo), kuras iki finišo."""
+        p = snap.player
+        if p is None or not p.valid or 0 <= snap.laps_remain < 30000:
+            return
+        my_lap = p.pace_lap
+        me = next((r for r in rows if r.is_me), None)
+        leader = rows[0] if rows else None
+        lp = ll = None
+        if leader is not None and me is not None and leader.idx != me.idx and leader.progress >= 0:
+            ll = leader.last_lap if leader.last_lap > 0 else 0.0
+            if leader.best_lap > 0 and (ll <= 0 or ll > leader.best_lap * 1.05):
+                ll = leader.best_lap * 1.01  # paskutinis ratas su boksais / incidentu - netinka
+            lp = leader.progress % 1.0
+        left = laps_left_timed(snap.time_remain, p.lap_pct, my_lap, lp, ll or None)
+        if left is None:
+            return
+        p.race_laps_left = left
+        if p.fuel_per_lap:
+            p.fuel_to_finish = left * p.fuel_per_lap
 
     # ------------------------------------------------------------------
     # Boksai, SOF, sektoriai
@@ -643,13 +671,41 @@ class TimingEngine:
         cflags = f.CarIdxSessionFlags
         rows = {c: self._make_row(c, m, me) for c in cars}
         if cflags is not None:
+            rs = self.player._racing_since  # mėlyna nerodoma per pace / rolling start ir pirmas sekundes
+            no_blue = rs is None or t - rs < BLUE_GRACE_S
             for c, r in rows.items():
                 if c < len(cflags):
-                    r.flag_bits = int(cflags[c])
+                    r.flag_bits = int(cflags[c]) & (~FLAG_BLUE if no_blue else -1)
+        results = {}
+        if m and f.SessionNum in m.sessions:
+            for res in m.sessions[f.SessionNum].results:
+                try:
+                    results[int(res.get("CarIdx"))] = res
+                except (TypeError, ValueError):
+                    pass
         for c, r in rows.items():
-            r.last_lap = float(last[c]) if last is not None and last[c] > 0 else 0.0
-            r.best_lap = float(best[c]) if best is not None and best[c] > 0 else 0.0
-            r.laps = int(lap_done[c]) if lap_done is not None and lap_done[c] >= 0 else 0
+            lv = float(last[c]) if last is not None and last[c] > 0 else 0.0
+            bv = float(best[c]) if best is not None and best[c] > 0 else 0.0
+            lp = int(lap_done[c]) if lap_done is not None and lap_done[c] >= 0 else 0
+            res = results.get(c)
+            if res is not None:
+                try:
+                    ft = float(res.get("FastestTime") or 0)
+                    if ft > 0 and (bv <= 0 or ft < bv - 1e-4):
+                        bv = ft
+                    lp = max(lp, int(res.get("LapsComplete") or 0))
+                except (TypeError, ValueError):
+                    pass
+            if c < len(self.best_seen):
+                if bv > 0 and (self.best_seen[c] <= 0 or bv < self.best_seen[c]):
+                    self.best_seen[c] = bv
+                bv = self.best_seen[c] if self.best_seen[c] > 0 else bv
+                if lv > 0:
+                    self.last_seen[c] = lv
+                lv = lv or float(self.last_seen[c])
+                self.laps_seen[c] = max(int(self.laps_seen[c]), lp)
+                lp = int(self.laps_seen[c])
+            r.last_lap, r.best_lap, r.laps = lv, bv, lp
             r.progress = float(prog_est[c]) if np.isfinite(prog_est[c]) else -1.0
             r.in_pit = bool(self.on_pit[c])
             r.pit_stops = int(self.pit_stops[c])
@@ -665,14 +721,6 @@ class TimingEngine:
                 r.status = "off"
             else:
                 r.status = "track"
-        results = {}
-        if m and f.SessionNum in m.sessions:
-            for res in m.sessions[f.SessionNum].results:
-                try:
-                    results[int(res.get("CarIdx"))] = res
-                except (TypeError, ValueError):
-                    pass
-
         # --- Tvarka ---
         if stype == "race":
             def key(c):

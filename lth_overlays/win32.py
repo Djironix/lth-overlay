@@ -210,6 +210,19 @@ def _remove_legacy() -> bool:
     return False
 
 
+def is_packaged() -> bool:
+    """Ar paleista iš Microsoft Store (MSIX) paketo. Tada paleidimą su Windows valdo pati Windows
+    (Settings > Apps > Startup), o registro Run įrašai paketui neveikia."""
+    if not IS_WIN:
+        return False
+    try:
+        n = ctypes.c_uint32(0)
+        rc = ctypes.windll.kernel32.GetCurrentPackageFullName(ctypes.byref(n), None)
+        return rc != 15700  # APPMODEL_ERROR_NO_PACKAGE
+    except (AttributeError, OSError):
+        return False
+
+
 def autostart_enabled() -> bool:
     if not IS_WIN:
         return False

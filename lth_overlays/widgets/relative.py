@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from ..registry import RELATIVE_COLUMNS
-from ..theme import fmt_rel, short_name
+from ..theme import fmt_lap, fmt_rel, short_name
 from .standings import irating_text
 from .table import RIGHT, Cell, TableWidget, ordered_columns
 
@@ -13,7 +13,7 @@ class RelativeWidget(TableWidget):
     MIN_WIDTH = 220
     HEIGHT_MODE = "rows"
     WIDTHS = {"classbar": 0.01, "pos": 1.6, "number": 2.2, "flag": 1.45, "name": None, "brand": 2.3,
-              "carname": 6.5, "status": 2.4, "irating": 2.3, "irchange": 2.2, "license": 2.0, "delta": 2.9, "catch": 3.0, "gap": 3.0}
+              "carname": 6.5, "status": 2.4, "irating": 2.3, "irchange": 2.2, "last": 3.9, "best": 3.9, "license": 2.0, "delta": 2.9, "catch": 3.0, "gap": 3.0}
 
     def __init__(self, ctx):
         self._rows = []
@@ -87,6 +87,12 @@ class RelativeWidget(TableWidget):
                 cells.append(Cell(k, irating_text(r.irating), fg="dim", align=RIGHT, font="small"))
             elif k == "irchange":
                 cells.append(self.irchange_cell(k, r, snap))
+            elif k == "last":
+                lf = "purple" if r.last_is_fastest else "good" if r.last_is_pb else "dim"
+                cells.append(Cell(k, fmt_lap(r.last_lap), fg=lf, align=RIGHT, font="small"))
+            elif k == "best":
+                cells.append(Cell(k, fmt_lap(r.best_lap), fg="purple" if r.best_is_fastest else "dim", align=RIGHT,
+                                  font="small"))
             elif k == "license":
                 cells.append(self.license_cell(k, r))
             elif k == "delta":
@@ -101,6 +107,8 @@ class RelativeWidget(TableWidget):
                 t = "" if rr.is_me else fmt_rel(rr.gap, rr.stale or rr.approx)
                 cells.append(Cell(k, t, fg="dim" if (rr.stale or rr.approx) else fg, align=RIGHT, font="bold"))
         flags = ("me",) if rr.is_me else (("friend",) if friend else ())
+        if race and r.flag_bits & 0x20 and self.cfg.get("blue_rows", True):
+            flags = flags + ("blue",)
         return ("car", tuple(cells), flags)
 
     @staticmethod

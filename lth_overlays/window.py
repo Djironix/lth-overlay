@@ -5,6 +5,8 @@ Efektyvumas: valdiklis perpiešiamas TIK kai pasikeičia tai, kas rodoma
 """
 from __future__ import annotations
 
+import time
+
 from PySide6.QtCore import QPoint, QPointF, QRect, QRectF, Qt
 from PySide6.QtGui import QColor, QGuiApplication, QPainter, QPen, QStaticText
 from PySide6.QtWidgets import QWidget
@@ -328,7 +330,9 @@ class OverlayWidget(QWidget):
     def fast_hz(self) -> int:
         if not self.FAST_CAPABLE or self.preview_mode or not self.cfg.get("smooth", True):
             return 0
-        return int(self.cfg.get("smooth_hz", 60) or 60)
+        hz = int(self.cfg.get("smooth_hz", 60) or 60)
+        cap = int(self.ctx.config.data.get("fps_cap", 0) or 0)  # Eco: bendra viršutinė riba
+        return min(hz, cap) if cap > 0 else hz
 
     def _update_fast(self):
         hz = self.fast_hz() if self.isVisible() else 0
@@ -358,15 +362,24 @@ class OverlayWidget(QWidget):
         t = getattr(self, "_fast_timer", None)
         return t is not None and t.isActive() and self.fast_source() is not None
 
+    IDLE_HZ = 12  # kai stovi (garaže, boksuose, po finišo) - greitas kelias sulėtinamas
+
     def _on_fast(self):
         timing = self.fast_source()
         if timing is None:
             return
+        if not self.editing and getattr(self.ctx, "idle", False):
+            now = time.perf_counter()
+            if now - getattr(self, "_last_fast", 0.0) < 1.0 / self.IDLE_HZ:
+                return
+            self._last_fast = now
+        t0 = time.perf_counter()
         try:
             if self.fast_tick(timing):
                 self.update()
         except Exception:  # noqa: BLE001 - laikmatis neturi nulaužti programos
             pass
+        self.cost_s += time.perf_counter() - t0
 
     def fast_tick(self, timing) -> bool:
         return False
@@ -394,7 +407,14 @@ class OverlayWidget(QWidget):
         if self.isVisible():
             win32.keep_on_top(self)
 
+    cost_s = 0.0  # kiek CPU laiko suvalgė piešimas + fast_tick (Performance puslapiui)
+
     def paintEvent(self, e):
+        t0 = time.perf_counter()
+        self._paint(e)
+        self.cost_s += time.perf_counter() - t0
+
+    def _paint(self, e):
         p = QPainter(self)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setRenderHint(QPainter.RenderHint.TextAntialiasing)
@@ -440,9 +460,27 @@ class OverlayWidget(QWidget):
             return
         width, col = st
         rad = self._drew_bg if not isinstance(self._drew_bg, bool) else self.pal.radius
-        p.setPen(QPen(col, width))
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        p.drawRoundedRect(QRectF(self.rect()).adjusted(width / 2, width / 2, -width / 2, -width / 2), rad, rad)
+        dpr = self.devicePixelRatioF()
+        key = (self.width(), self.height(), width, col.rgba(), rad, dpr)
+        cache = getattr(self, "_outline_pm", None)
+        if cache is None or cache[0] != key:  # antialiasintas kontūras kainuoja - piešiam vieną kartą
+            from PySide6.QtGui import QPixmap
+            pm = QPixmap(max(1, int(self.width() * dpr)), max(1, int(self.height() * dpr)))
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.GlobalColor.transparent)
+            q = QPainter(pm)
+            q.setRenderHint(QPainter.RenderHint.Antialiasing)
+            q.setPen(QPen(col, width))
+            q.setBrush(Qt.BrushStyle.NoBrush)
+            q.drawRoundedRect(QRectF(self.rect()).adjusted(width / 2, width / 2, -width / 2, -width / 2), rad, rad)
+            q.end()
+            cache = self._outline_pm = (key, pm)
+        pm = cache[1]
+        w, h = self.width(), self.height()
+        b = int(min(min(w, h) / 2, rad + width + 2))  # tik kraštų juostos, ne visas paveikslėlis
+        for x, y, bw, bh in ((0, 0, w, b), (0, h - b, w, b), (0, b, b, h - 2 * b), (w - b, b, b, h - 2 * b)):
+            if bw > 0 and bh > 0:
+                p.drawPixmap(QRectF(x, y, bw, bh), pm, QRectF(x * dpr, y * dpr, bw * dpr, bh * dpr))
 
     # ---------------- redagavimo rėmelis ----------------
     def _edit_font(self):

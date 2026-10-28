@@ -8,7 +8,7 @@ import re
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPainterPath, QPen, QPixmap, QPolygonF
-from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QMessageBox, QWidget
+from PySide6.QtWidgets import QFileDialog, QGridLayout, QHBoxLayout, QMessageBox, QVBoxLayout, QWidget
 
 from lth_timing import telemetry as T
 
@@ -86,10 +86,15 @@ class LapTimesChart(QWidget):
 
 
 class TraceView(QWidget):
-    """Kanalai pagal atstumą: laiko skirtumas, greitis, pedalai, vairas, pavara. Ratukas - artinti."""
+    """Kanalai pagal atstumą: laiko skirtumas, greitis, dujos, stabdys, vairas, pavara. Ratukas - artinti.
+    Kiekvienas ratas turi savo spalvą visuose grafikuose (A - auksinė, B - mėlyna)."""
 
-    PANELS = (("delta", "Delta", 0.9), ("speed", "Speed", 1.6), ("pedals", "Throttle / brake", 1.1),
-              ("steer", "Steering", 0.9), ("gear", "Gear", 0.7))
+    PANELS = (("delta", "Delta", 1.0), ("speed", "Speed", 1.6), ("throttle", "Throttle", 0.85),
+              ("brake", "Brake", 0.85), ("steer", "Steering", 0.8), ("gear", "Gear", 0.65))
+    GAP = 24
+    TOP = 26  # legenda
+
+    hovered = Signal(float)  # rato dalis 0..1, -1 = pelė ne ant grafiko
 
     def __init__(self):
         super().__init__()
@@ -101,7 +106,7 @@ class TraceView(QWidget):
         self._hover = None
         self._drag = None
         self.setMouseTracking(True)
-        self.setMinimumHeight(520)
+        self.setMinimumHeight(700)
         self.setCursor(Qt.CursorShape.CrossCursor)
 
     def set_laps(self, a, b, track_m):
@@ -116,9 +121,9 @@ class TraceView(QWidget):
 
     # ---- geometrija ----
     def _rects(self):
-        r = QRectF(self.rect()).adjusted(64, 6, -12, -24)
+        r = QRectF(self.rect()).adjusted(70, self.TOP, -12, -24)
         total = sum(k for *_, k in self.PANELS)
-        gap = 10
+        gap = self.GAP
         h_avail = r.height() - gap * (len(self.PANELS) - 1)
         out, y = [], r.top()
         for key, title, k in self.PANELS:
@@ -142,6 +147,22 @@ class TraceView(QWidget):
         return QPolygonF([QPointF(float(x), float(y)) for x, y in zip(xs, ys)])
 
     # ---- piešimas ----
+    def _legend(self, p):
+        x = 70.0
+        p.setFont(ui_font(11, QFont.Weight.DemiBold))
+        for lap, col, name in ((self.a, COL_A, "A"), (self.b, COL_B, "B")):
+            if lap is None:
+                continue
+            p.setPen(QPen(col, 3))
+            p.drawLine(QPointF(x, 12), QPointF(x + 22, 12))
+            who = lap.meta.get("driver") if lap.meta.get("imported") else ("saved best" if lap.meta.get("saved_best")
+                                                                          else f"lap {lap.number}")
+            txt = f"{name}  {who}  {T.fmt(lap.lap_time)}"
+            p.setPen(qcolor("text"))
+            p.drawText(QRectF(x + 28, 2, 400, 20), Qt.AlignmentFlag.AlignVCenter, txt)
+            x += 28 + p.fontMetrics().horizontalAdvance(txt) + 28
+        p.setFont(ui_font(10))
+
     def _paint_base(self) -> QPixmap:
         dpr = self.devicePixelRatioF()
         pm = QPixmap(int(self.width() * dpr), int(self.height() * dpr))
@@ -149,19 +170,26 @@ class TraceView(QWidget):
         pm.fill(Qt.GlobalColor.transparent)
         p = QPainter(pm)
         p.setRenderHint(QPainter.RenderHint.Antialiasing)
-        p.setFont(ui_font(10))
         a, b = self.a, self.b
+        self._legend(p)
         for key, title, rect in self._rects():
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(qcolor("bg"))
-            p.drawRoundedRect(rect.adjusted(-4, -2, 4, 2), 6, 6)
-            p.setPen(qcolor("faint"))
-            p.drawText(QRectF(0, rect.top(), 58, 16), Qt.AlignmentFlag.AlignRight, title.split(" /")[0])
+            p.drawRoundedRect(rect.adjusted(-4, -3, 4, 3), 6, 6)
+            p.setPen(QPen(qcolor("border"), 1))
+            for k in (0.25, 0.5, 0.75):  # tinklelis
+                yy = rect.bottom() - rect.height() * k
+                p.drawLine(QPointF(rect.left(), yy), QPointF(rect.right(), yy))
+            p.setPen(qcolor("muted"))
+            p.setFont(ui_font(10.5, QFont.Weight.DemiBold))
+            p.drawText(QRectF(0, rect.top() - 2, 62, 16), Qt.AlignmentFlag.AlignRight, title)
+            p.setFont(ui_font(10))
             if a is None:
                 continue
             g = a.grid
             if key == "delta":
                 if b is None:
+                    p.setPen(qcolor("faint"))
                     p.drawText(rect, Qt.AlignmentFlag.AlignCenter, "Pick a second lap to see where time is won or lost")
                     continue
                 d = T.delta_trace(a, b)
@@ -170,8 +198,8 @@ class TraceView(QWidget):
                 ymid = rect.center().y()
                 p.drawLine(QPointF(rect.left(), ymid), QPointF(rect.right(), ymid))
                 p.setPen(qcolor("faint"))
-                p.drawText(QRectF(0, rect.top() + 14, 58, 14), Qt.AlignmentFlag.AlignRight, f"+{m:.1f}s")
-                p.drawText(QRectF(0, rect.bottom() - 14, 58, 14), Qt.AlignmentFlag.AlignRight, f"-{m:.1f}s")
+                p.drawText(QRectF(0, rect.top() + 16, 62, 14), Qt.AlignmentFlag.AlignRight, f"B +{m:.1f}s")
+                p.drawText(QRectF(0, rect.bottom() - 14, 62, 14), Qt.AlignmentFlag.AlignRight, f"B -{m:.1f}s")
                 poly = self._poly(g, d, rect, -m, m)
                 if len(poly) > 1:
                     path = QPainterPath()
@@ -188,39 +216,34 @@ class TraceView(QWidget):
                     p.setClipRect(QRectF(rect.left(), ymid, rect.width(), rect.bottom() - ymid))
                     p.fillPath(path, QColor(60, 220, 140, 70))
                     p.restore()
-                    p.setPen(QPen(qcolor("text"), 1.4))
+                    p.setPen(QPen(qcolor("text"), 1.6))
                     p.drawPolyline(poly)
                 continue
-            chans = {"speed": [("speed", 0, None)], "pedals": [("throttle", 0, 1), ("brake", 0, 1)],
-                     "steer": [("steer", None, None)], "gear": [("gear", 0, None)]}[key]
-            for ch, lo, hi in chans:
-                series = [(lap, T.channel_on(lap, g, ch)) for lap in (a, b) if lap is not None]
-                series = [(lap, v) for lap, v in series if v is not None]
-                if not series:
-                    continue
-                if lo is None or hi is None:
-                    allv = np.concatenate([v for _, v in series])
-                    if ch == "steer":
-                        m = float(max(0.2, np.nanmax(np.abs(allv))))
-                        lo, hi = -m, m
-                    else:
-                        hi = float(max(1.0, np.nanmax(allv) * 1.05))
-                for lap, v in reversed(series):
-                    col = QColor(COL_A if lap is a else COL_B)
-                    if key == "pedals":
-                        col = QColor("#3DDC97") if ch == "throttle" else QColor("#FF4D5E")
-                        if lap is b:
-                            col.setAlpha(150)
-                    pen = QPen(col, 1.6 if lap is a else 1.4)
-                    if lap is b and key == "pedals":
-                        pen.setStyle(Qt.PenStyle.DashLine)
-                    p.setPen(pen)
-                    p.drawPolyline(self._poly(g, v, QRectF(rect), lo, hi))
-                if key == "speed":
-                    k = 3.6 if self.unit_kmh else 2.236936
-                    p.setPen(qcolor("faint"))
-                    p.drawText(QRectF(0, rect.top() + 14, 58, 14), Qt.AlignmentFlag.AlignRight,
-                               f"{hi * k:.0f}")
+            lo, hi = {"speed": (0.0, None), "throttle": (0.0, 1.0), "brake": (0.0, 1.0),
+                      "steer": (None, None), "gear": (0.0, None)}[key]
+            series = [(lap, T.channel_on(lap, g, key)) for lap in (a, b) if lap is not None]
+            series = [(lap, v) for lap, v in series if v is not None]
+            if not series:
+                continue
+            if lo is None or hi is None:
+                allv = np.concatenate([v for _, v in series])
+                if key == "steer":
+                    m = float(max(0.2, np.nanmax(np.abs(allv))))
+                    lo, hi = -m, m
+                else:
+                    hi = float(max(1.0, np.nanmax(allv) * 1.05))
+            for lap, v in reversed(series):  # B apačioje, A viršuje
+                col = QColor(COL_A if lap is a else COL_B)
+                p.setPen(QPen(col, 2.0 if lap is a else 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                              Qt.PenJoinStyle.RoundJoin))
+                p.drawPolyline(self._poly(g, v, QRectF(rect), lo, hi))
+            p.setPen(qcolor("faint"))
+            if key == "speed":
+                k = 3.6 if self.unit_kmh else 2.236936
+                p.drawText(QRectF(0, rect.top() + 16, 62, 14), Qt.AlignmentFlag.AlignRight, f"{hi * k:.0f}")
+                p.drawText(QRectF(0, rect.bottom() - 14, 62, 14), Qt.AlignmentFlag.AlignRight, "0")
+            elif key in ("throttle", "brake"):
+                p.drawText(QRectF(0, rect.top() + 16, 62, 14), Qt.AlignmentFlag.AlignRight, "100%")
         # atstumo ašis
         rects = self._rects()
         bottom = rects[-1][2]
@@ -236,20 +259,27 @@ class TraceView(QWidget):
         p.end()
         return pm
 
+    def hover_pct(self):
+        if self._hover is None or self.a is None:
+            return None
+        top = self._rects()[0][2]
+        if not (top.left() <= self._hover <= top.right()):
+            return None
+        return self.x0 + (self._hover - top.left()) / top.width() * (self.x1 - self.x0)
+
     def paintEvent(self, e):
         key = (id(self.a), id(self.b), self.width(), self.height(), self.x0, self.x1, self.unit_kmh)
         if self._cache is None or self._cache[0] != key:
             self._cache = (key, self._paint_base())
         p = QPainter(self)
         p.drawPixmap(0, 0, self._cache[1])
-        if self._hover is None or self.a is None:
+        gx = self.hover_pct()
+        if gx is None:
             return
         rects = self._rects()
         top, bottom = rects[0][2], rects[-1][2]
         x = self._hover
-        if not (top.left() <= x <= top.right()):
-            return
-        gx = self.x0 + (x - top.left()) / top.width() * (self.x1 - self.x0)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         p.setPen(QPen(QColor(255, 255, 255, 120), 1))
         p.drawLine(QPointF(x, top.top()), QPointF(x, bottom.bottom()))
         lines = []
@@ -278,6 +308,133 @@ class TraceView(QWidget):
         for i, (t, c) in enumerate(lines):
             p.setPen(c)
             p.drawText(QRectF(box.left() + 10, box.top() + 5 + i * 18, w - 14, 18), Qt.AlignmentFlag.AlignVCenter, t)
+        # taškai ant kreivių
+        for key, _, rect in rects:
+            if key not in ("speed",):
+                continue
+            for lap, col in ((self.b, COL_B), (self.a, COL_A)):
+                if lap is None:
+                    continue
+                hi = float(max(1.0, max(np.nanmax(l.data["speed"]) for l in (self.a, self.b) if l is not None) * 1.05))
+                v = float(np.interp(gx, lap.grid, lap.data["speed"]))
+                y = rect.bottom() - min(1.0, v / hi) * rect.height()
+                p.setPen(QPen(QColor(15, 16, 20), 1.5))
+                p.setBrush(col)
+                p.drawEllipse(QPointF(x, y), 4, 4)
+
+
+class TrackMini(QWidget):
+    """Trasos kontūras šalia grafikų: kur tiksliai trasoje yra pelė ir kur B laimi (žalia) / pralaimi (raudona)."""
+
+    def __init__(self):
+        super().__init__()
+        self.points = None
+        self.a = self.b = None
+        self.pos = None
+        self._cache = None
+        self.setFixedSize(300, 300)
+
+    def set_data(self, points, a, b):
+        self.points = None if points is None else np.asarray(points, dtype=float)
+        self.a, self.b = a, b
+        self._cache = None
+        self.update()
+
+    def set_pos(self, gx):
+        self.pos = gx if gx is not None and gx >= 0 else None
+        self.update()
+
+    def _xy(self):
+        r = QRectF(self.rect()).adjusted(16, 16, -16, -16)
+        pts = self.points
+        if pts is None:  # nėra įrašyto žemėlapio - apskritimas
+            a = np.linspace(0, 2 * np.pi, 400, endpoint=False)
+            pts = np.stack([0.5 + 0.5 * np.sin(a), 0.5 - 0.5 * np.cos(a)], axis=1)
+        lo, hi = pts.min(axis=0), pts.max(axis=0)
+        span = max(float((hi - lo).max()), 1e-6)
+        k = min(r.width(), r.height()) / span
+        mid = (lo + hi) / 2
+        xs = r.center().x() + (pts[:, 0] - mid[0]) * k
+        ys = r.center().y() + (pts[:, 1] - mid[1]) * k
+        return np.stack([xs, ys], axis=1)
+
+    def _at(self, xy, g):
+        n = len(xy)
+        x = (g % 1.0) * n
+        i = int(x) % n
+        j = (i + 1) % n
+        f = x - int(x)
+        return QPointF(xy[i, 0] * (1 - f) + xy[j, 0] * f, xy[i, 1] * (1 - f) + xy[j, 1] * f)
+
+    def _base(self):
+        dpr = self.devicePixelRatioF()
+        pm = QPixmap(int(self.width() * dpr), int(self.height() * dpr))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.GlobalColor.transparent)
+        p = QPainter(pm)
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(qcolor("bg"))
+        p.drawRoundedRect(QRectF(self.rect()), 10, 10)
+        xy = self._xy()
+        n = len(xy)
+        p.setPen(QPen(QColor(0, 0, 0, 160), 9, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+        p.drawPolyline(QPolygonF([QPointF(x, y) for x, y in xy] + [QPointF(*xy[0])]))
+        # spalva pagal tai, kur B laimi / pralaimi prieš A
+        cols = None
+        if self.a is not None and self.b is not None:
+            gs = (np.arange(n + 1) / n)
+            ta = np.interp(gs, self.a.grid, self.a.data["time"])
+            tb = np.interp(gs, self.b.grid, self.b.data["time"])
+            dd = np.diff(tb - ta)  # + = B šioje atkarpoje lėtesnis
+            thr = max(0.004, float(np.percentile(np.abs(dd), 60)))
+            cols = dd / thr
+        for i in range(n):
+            j = (i + 1) % n
+            if cols is None:
+                c = QColor(220, 220, 225, 200)
+            else:
+                v = max(-1.0, min(1.0, float(cols[i])))
+                if v > 0.15:
+                    c = QColor(255, 80, 90, int(120 + 135 * v))
+                elif v < -0.15:
+                    c = QColor(60, 220, 140, int(120 - 135 * v))
+                else:
+                    c = QColor(200, 200, 205, 170)
+            p.setPen(QPen(c, 4.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+            p.drawLine(QPointF(*xy[i]), QPointF(*xy[j]))
+        # starto linija
+        s0, s1 = self._at(xy, 0.0), self._at(xy, 0.004)
+        dx, dy = s1.x() - s0.x(), s1.y() - s0.y()
+        ln = math.hypot(dx, dy) or 1.0
+        nx, ny = -dy / ln * 9, dx / ln * 9
+        p.setPen(QPen(COL_A, 3))
+        p.drawLine(QPointF(s0.x() - nx, s0.y() - ny), QPointF(s0.x() + nx, s0.y() + ny))
+        p.setPen(qcolor("faint"))
+        p.setFont(ui_font(10))
+        note = "green: B faster   red: B slower" if cols is not None else ("" if self.points is not None
+                                                                          else "track outline not recorded yet")
+        p.drawText(QRectF(10, self.height() - 22, self.width() - 20, 16), Qt.AlignmentFlag.AlignCenter, note)
+        p.end()
+        return pm
+
+    def paintEvent(self, e):
+        key = (id(self.points), id(self.a), id(self.b), self.width(), self.height())
+        if self._cache is None or self._cache[0] != key:
+            self._cache = (key, self._base())
+        p = QPainter(self)
+        p.drawPixmap(0, 0, self._cache[1])
+        if self.pos is None:
+            return
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        c = self._at(self._xy(), self.pos)
+        p.setPen(QPen(QColor(15, 16, 20), 2))
+        p.setBrush(COL_A)
+        p.drawEllipse(c, 7, 7)
+        p.setPen(QPen(QColor(255, 255, 255), 1.5))
+        p.setBrush(Qt.BrushStyle.NoBrush)
+        p.drawEllipse(c, 11, 11)
+
 
     # ---- pelė ----
     def mouseMoveEvent(self, e):
@@ -291,6 +448,8 @@ class TraceView(QWidget):
             self._cache = None
         self._hover = x
         self.update()
+        gx = self.hover_pct()
+        self.hovered.emit(-1.0 if gx is None else float(gx))
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -305,6 +464,7 @@ class TraceView(QWidget):
     def leaveEvent(self, e):
         self._hover = None
         self.update()
+        self.hovered.emit(-1.0)
 
     def wheelEvent(self, e):
         r = self._rects()[0][2]
@@ -316,6 +476,8 @@ class TraceView(QWidget):
         self.x0, self.x1 = x0, x0 + span
         self._cache = None
         self.update()
+        gx = self.hover_pct()
+        self.hovered.emit(-1.0 if gx is None else float(gx))
 
 
 # ====================================================================== puslapis
@@ -384,7 +546,16 @@ class TelemetryPage(Page):
         btns.addWidget(b_dir)
         cmp_.add(btns)
         self.trace = TraceView()
-        cmp_.add(self.trace)
+        self.mini = TrackMini()
+        self.trace.hovered.connect(self.mini.set_pos)
+        tr_row = QHBoxLayout()
+        tr_row.setSpacing(14)
+        tr_row.addWidget(self.trace, 1)
+        side = QVBoxLayout()
+        side.addWidget(self.mini)
+        side.addStretch(1)
+        tr_row.addLayout(side)
+        cmp_.add(tr_row)
         self.content.addWidget(cmp_)
         self.content.addStretch(1)
 
@@ -519,6 +690,30 @@ class TelemetryPage(Page):
         units = (self.ctx.config.widget("inputs") or {}).get("unit", "kmh")
         self.trace.unit_kmh = units != "mph"
         self.trace.set_laps(a, b if b is not a else None, tm)
+        self.mini.set_data(self._track_points(a), a, b if b is not a else None)
+
+    def _track_points(self, lap):
+        """Trasos kontūras: iš rato failo (draugo ratas) arba šios trasos įrašytas žemėlapis."""
+        if lap is None:
+            return None
+        if lap.track_map is not None:
+            return lap.track_map
+        eng = getattr(self.ctx, "engine", None)
+        tm = getattr(getattr(eng, "timing", None), "trackmap", None)
+        key = lap.meta.get("track_key")
+        if tm is not None and tm.points is not None and (not key or str(tm.key) == str(key)):
+            return tm.points
+        if key:  # išsaugotas žemėlapis diske
+            path = os.path.join(app_dir(), "maps", f"{key}.json")
+            try:
+                import json
+                with open(path, encoding="utf-8") as fh:
+                    pts = np.asarray(json.load(fh)["pts"], dtype=float)
+                if pts.ndim == 2 and pts.shape[1] == 2:
+                    return pts
+            except (OSError, ValueError, KeyError):
+                pass
+        return None
 
     # ---- failai ----
     def _import(self):
@@ -551,7 +746,7 @@ class TelemetryPage(Page):
         path, _ = QFileDialog.getSaveFileName(self, "Export lap", os.path.join(laps_dir(), name), "LTH lap (*.lthlap)")
         if path:
             try:
-                T.save_lap(path, lap)
+                T.save_lap(path, lap, self._track_points(lap))
             except OSError as e:
                 QMessageBox.warning(self, "Export lap", str(e))
 
@@ -567,7 +762,7 @@ class TelemetryPage(Page):
                 QMessageBox.warning(self, "Export CSV", str(e))
 
 
-def autosave_best(recorder, state: dict) -> str | None:
+def autosave_best(recorder, state: dict, track_map=None) -> str | None:
     """Kviečiama UI gijoje ~1 Hz: išsaugo geriausią galiojantį ratą (jei geresnis nei diske)."""
     if recorder is None or recorder.version == state.get("ver"):
         return None
@@ -591,7 +786,7 @@ def autosave_best(recorder, state: dict) -> str | None:
         return None
     try:
         os.makedirs(os.path.dirname(path), exist_ok=True)
-        T.save_lap(path, best)
+        T.save_lap(path, best, track_map)
     except OSError:
         return None
     state["saved"] = key

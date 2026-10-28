@@ -92,6 +92,8 @@ class PlayerState:
     fuel_to_finish: float | None = None
     # ratai
     lap_no: int = 0
+    lap_pct: float = 0.0  # kur rate esu (0..1)
+    pace_lap: float | None = None  # mano tempas likusiems ratams (s)
     laps: tuple = ()
     last_lap: float = 0.0
     best_lap: float = 0.0
@@ -175,7 +177,7 @@ class PlayerTracker:
         self._pending_lap = None
         self._last_lap_value = None
         self._laps = deque(maxlen=60)
-        self._fuel_hist = deque(maxlen=5)
+        self._fuel_hist = deque(maxlen=7)
         self._stint_start = None
         self._racing_since = None
         self._stint_lap0 = 0
@@ -330,7 +332,8 @@ class PlayerTracker:
         hist = list(self._fuel_hist)
         s.fuel_laps_counted = len(hist)
         if hist:
-            s.fuel_per_lap = sum(hist) / len(hist)
+            from .laps import clean_fuel_avg
+            s.fuel_per_lap = clean_fuel_avg(hist) or sum(hist) / len(hist)
             s.fuel_last_lap = hist[-1]
             if s.fuel_per_lap > 0 and math.isfinite(s.fuel_l):
                 s.fuel_laps_left = s.fuel_l / s.fuel_per_lap
@@ -351,12 +354,17 @@ class PlayerTracker:
                 s.consistency = float(np.std(clean))
         # likęs atstumas iki finišo (ratais)
         pct = _f(f.LapDistPct, 0.0)
-        avg_lap = s.stint_avg or (s.last_lap if s.last_lap > 0 else None)
+        s.lap_pct = pct if math.isfinite(pct) and pct >= 0 else 0.0
+        # tempas likusiems ratams: paskutinių švarių ratų mediana (be boksų / geltonų ratų)
+        recent = sorted(x.time for x in laps[-5:] if not x.pit and x.time > 0)
+        s.pace_lap = recent[len(recent) // 2] if recent else (s.last_lap if s.last_lap > 0 else None)
+        avg_lap = s.pace_lap
         if race:
             if 0 <= laps_remain < 30000:
-                s.race_laps_left = max(0.0, laps_remain - (pct if math.isfinite(pct) else 0.0))
-            elif avg_lap and time_remain > 0 and time_remain < 1e6:
-                s.race_laps_left = math.ceil(time_remain / avg_lap) + 1 - (pct if math.isfinite(pct) else 0.0)
+                s.race_laps_left = max(0.0, laps_remain - s.lap_pct)
+            elif avg_lap and 0 <= time_remain < 1e6:
+                from .laps import laps_left_timed
+                s.race_laps_left = laps_left_timed(time_remain, s.lap_pct, avg_lap)
             if s.race_laps_left is not None and s.fuel_per_lap:
                 s.fuel_to_finish = s.race_laps_left * s.fuel_per_lap
         # delta

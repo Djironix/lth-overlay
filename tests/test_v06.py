@@ -187,6 +187,8 @@ def test_new_widgets_paint(oapp, engine):
 def test_column_header_adds_height(oapp, engine):
     snap = engine.snapshot()
     w = oapp.widgets["relative"]
+    oapp.config.widget("relative")["column_header"] = False
+    oapp.widget_changed("relative")
     w.push(snap, force=True)
     h0 = w.desired_height()
     oapp.config.widget("relative")["column_header"] = True
@@ -244,3 +246,85 @@ def test_control_center_new_pages(oapp, qapp):
     dp.tag(123456, "Test Driver", "team")
     assert oapp.config.friends()[123456] == "#3DDC97"
     cc.hide()
+
+
+def test_practice_standings_survive_garage_reset():
+    """iRacing nuresetina CarIdxBestLapTime, kai mašina grįžta į garažą - vieta neturi pasikeisti."""
+    sim = SimRace(n_cars=12, multiclass=False, max_cars=12, rain=False, events=False, record=False)
+    sim.model.sessions[0].type = "practice"
+    eng = TimingEngine()
+    eng.set_session(sim.model)
+    f = None
+    for _ in range(60 * 300):
+        f = sim.step()
+        eng.update(f)
+    eng._rows_cache = None
+    before = {r.idx: (r.pos, r.best_lap) for r in eng.snapshot().cars}
+    leader = min(before, key=lambda c: before[c][0])
+    vals = dict(f.values)
+    for k in ("CarIdxBestLapTime", "CarIdxLastLapTime", "CarIdxLapDistPct", "CarIdxLapCompleted"):
+        arr = np.array(vals[k]).copy()
+        arr[leader] = -1
+        vals[k] = arr
+    vals["SessionTime"] = float(vals["SessionTime"]) + 0.5
+    from lth_timing.frame import Frame
+    eng.update(Frame(vals))
+    eng._rows_cache = None
+    after = {r.idx: (r.pos, r.best_lap) for r in eng.snapshot().cars}
+    assert after[leader] == before[leader]
+    assert next(r for r in eng.snapshot().cars if r.idx == leader).status == "garage"
+
+
+# ---------------------------------------------------------------- v0.6.1
+def test_fuel_plan_matches_hand_calculation():
+    from lth_overlays.widgets.car import fuel_plan
+    a = fuel_plan(30, 2.5, 10.0, 100, 0.5, 5, 0.0)
+    assert a["stops"] == 0 and a["spare"] == pytest.approx(2.0) and a["allowed"] == pytest.approx(30 / 10.5)
+    b = fuel_plan(20, 2.5, 20.0, 40, 0.5, 5, 0.0)
+    # vėliausiai lapo 11 pabaigoje (7 ratai = 17,5 l + 1,25 l atsarga <= 20 l), anksčiausiai 9 (po to 15,5 rato = 38,75 l <= 40 l)
+    assert (b["stops"], b["latest_lap"], b["earliest_lap"]) == (1, 11, 9)
+    assert b["deficit"] == pytest.approx(31.25) and not b["save_ok"]
+    c = fuel_plan(24.5, 2.5, 10.0, 100, 0.5, 1, 0.5)
+    assert c["save_ok"] and c["save_target"] == pytest.approx(24.5 / 10.5)
+    d = fuel_plan(5, 2.5, 10.0, 60, 0.5, 7, 0.6)
+    assert d["latest_lap"] == 8
+
+
+def test_timed_race_laps_left_and_fuel_filter():
+    from lth_timing.laps import clean_fuel_avg, laps_left_timed
+    assert laps_left_timed(950, 0.0, 100) == pytest.approx(10.0)
+    assert laps_left_timed(950, 0.5, 100) == pytest.approx(9.5)
+    assert laps_left_timed(0, 0.3, 100) == pytest.approx(0.7)  # laikas baigėsi: tik šis ratas
+    # greitesnis lyderis baigia anksčiau -> man mažiau ratų nei skaičiuojant savo tempu
+    assert laps_left_timed(950, 0.2, 100, 0.8, 95) <= laps_left_timed(950, 0.2, 100)
+    assert clean_fuel_avg([2.6, 2.62, 1.4, 2.58, 2.61]) == pytest.approx(2.6025)  # geltonas ratas atmestas
+
+
+def test_relative_last_best_columns_and_titles_default(oapp, engine):
+    from lth_overlays.registry import BY_NAME, defaults_for
+    assert defaults_for(BY_NAME["relative"])["column_header"] is True
+    assert defaults_for(BY_NAME["standings"])["column_header"] is True
+    snap = engine.snapshot()
+    oapp.config.widget("relative")["columns"].update(last=True, best=True)
+    w = oapp.widgets["relative"]
+    w.apply_settings()
+    w.push(snap, force=True)
+    assert "last" in w._cols and "best" in w._cols
+    cells = {c[0]: c[1] for c in w._rows[0][1]}
+    assert ":" in cells["last"] and ":" in cells["best"]
+
+
+def test_fuel_strategy_widget_paints(oapp, engine):
+    snap = engine.snapshot()
+    w = oapp.widgets["fuel_strategy"]
+    w.push(snap, force=True)
+    w.resize(w.target_width(), w.final_height())
+    assert w._view is not None and not w.grab().isNull()
+
+
+def test_recorder_keeps_lap_on_session_info_update(engine):
+    r = engine.recorder
+    n = len(r.laps)
+    buf = len(r._buf)
+    r.set_session(dict(r.meta), r.track_m)  # tas pats trasa / mašina - einamasis ratas lieka
+    assert len(r.laps) == n and len(r._buf) == buf

@@ -1,26 +1,42 @@
 <?xml version="1.0" encoding="utf-8"?>
-<!-- Microsoft Store package (MSIX). The Store signs it for free and Store installs show
-     no SmartScreen warning. Fill Identity Name/Publisher from Partner Center. -->
+<!-- Microsoft Store package (MSIX). The Store signs it for free; Store installs show no
+     SmartScreen warning. Identity Name / Publisher / PublisherDisplayName come from
+     Partner Center (Product identity page). make_msix.ps1 fills Version from lth_timing. -->
 <Package xmlns="http://schemas.microsoft.com/appx/manifest/foundation/windows10"
          xmlns:uap="http://schemas.microsoft.com/appx/manifest/uap/windows10"
+         xmlns:uap10="http://schemas.microsoft.com/appx/manifest/uap/windows10/10"
+         xmlns:desktop="http://schemas.microsoft.com/appx/manifest/desktop/windows10"
          xmlns:rescap="http://schemas.microsoft.com/appx/manifest/foundation/windows10/restrictedcapabilities"
-         IgnorableNamespaces="uap rescap">
+         IgnorableNamespaces="uap uap10 desktop rescap">
   <Identity Name="REPLACE.LTHOverlays" Publisher="CN=REPLACE-WITH-PARTNER-CENTER-PUBLISHER-ID"
-            Version="0.1.0.0" ProcessorArchitecture="x64"/>
+            Version="0.0.0.0" ProcessorArchitecture="x64"/>
   <Properties>
     <DisplayName>LTH Overlays</DisplayName>
-    <PublisherDisplayName>LTH Racing</PublisherDisplayName>
+    <PublisherDisplayName>REPLACE-WITH-PUBLISHER-DISPLAY-NAME</PublisherDisplayName>
     <Logo>Assets\StoreLogo.png</Logo>
   </Properties>
   <Dependencies>
-    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.17763.0" MaxVersionTested="10.0.26100.0"/>
+    <TargetDeviceFamily Name="Windows.Desktop" MinVersion="10.0.19041.0" MaxVersionTested="10.0.26100.0"/>
   </Dependencies>
   <Resources><Resource Language="en-us"/></Resources>
   <Applications>
     <Application Id="LTHOverlays" Executable="LTH Overlays.exe" EntryPoint="Windows.FullTrustApplication">
-      <uap:VisualElements DisplayName="LTH Overlays" Description="iRacing overlays by LTH"
+      <uap:VisualElements DisplayName="LTH Overlays" Description="iRacing overlays by the LTH community"
                           BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
                           Square44x44Logo="Assets\Square44x44Logo.png"/>
+    </Application>
+    <!-- Start with Windows: the user switches it on in Settings > Apps > Startup.
+         Starts in the tray (autostart parameter), without opening the Control Center. -->
+    <Application Id="LTHOverlaysStartup" Executable="LTH Overlays.exe" EntryPoint="Windows.FullTrustApplication"
+                 uap10:Parameters="--autostart">
+      <uap:VisualElements DisplayName="LTH Overlays (startup)" Description="Starts LTH Overlays in the tray"
+                          BackgroundColor="transparent" Square150x150Logo="Assets\Square150x150Logo.png"
+                          Square44x44Logo="Assets\Square44x44Logo.png" AppListEntry="none"/>
+      <Extensions>
+        <desktop:Extension Category="windows.startupTask">
+          <desktop:StartupTask TaskId="LTHOverlaysStartup" Enabled="false" DisplayName="LTH Overlays"/>
+        </desktop:Extension>
+      </Extensions>
     </Application>
   </Applications>
   <Capabilities>

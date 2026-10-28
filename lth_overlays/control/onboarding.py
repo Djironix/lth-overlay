@@ -211,10 +211,20 @@ class Onboarding(QWidget):
         # 5. Pabaiga
         self.try_edit = button("Try edit mode now", None, "move")
         self.try_edit.clicked.connect(lambda: (self._finish(), self.ctx.editing or self.ctx.toggle_edit()))
+        auto = QFrame()
+        auto.setObjectName("Demo")
+        auto.setStyleSheet(f"QFrame#Demo {{ background: {T['bg']}; border: 1px solid {T['border']};"
+                           f" border-radius: 12px; }}")
+        al = QHBoxLayout(auto)
+        al.setContentsMargins(18, 12, 18, 12)
+        al.addWidget(label("Start with Windows (waits quietly for iRacing)", "h3"))
+        al.addStretch(1)
+        self.t_autostart = Toggle(bool(self.ctx.config.data.get("autostart", True)))
+        al.addWidget(self.t_autostart)
         self._page(_title("You are set"),
-                   _body("LTH Overlays lives next to the clock (the LTH icon). It starts with Windows and waits "
-                         "quietly for iRacing, so you never have to open it before a race. Closing this window "
-                         "keeps the overlays running."),
+                   _body("LTH Overlays lives next to the clock (the LTH icon). Closing this window keeps the "
+                         "overlays running."),
+                   auto,
                    _Bullet("info", "Tutorial again", "About page → Show tutorial."),
                    self.try_edit)
 
@@ -240,6 +250,16 @@ class Onboarding(QWidget):
             self._go(i + 1)
 
     def _finish(self):
+        if getattr(self, "_done", False):
+            return
+        self._done = True
+        d = self.ctx.config.data
+        if not d.get("autostart_done"):  # tik vartotojui sutikus (ne tyliai) - antivirusai to nemėgsta
+            d["autostart_done"] = True
+            try:
+                self.ctx.set_autostart(bool(self.t_autostart.isChecked()))
+            except Exception:  # noqa: BLE001
+                pass
         self.ctx.config.data["onboarding_done"] = True
         self.ctx.save_config()
         self.hide()

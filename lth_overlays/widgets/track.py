@@ -68,15 +68,27 @@ class TrackMapWidget(PanelWidget):
             cars.append((r.idx, round(pct, 4), r.class_color, r.number, r.is_me, r.status == "pit",
                          r.class_pos == 1))
         cars.sort(key=lambda c: c[4])  # aš - paskutinis (viršuje)
+        # mėlyna vėliava (lenkiamas) ir draugų spalvos (Drivers puslapis)
+        race = snap.session_type == "race"
+        friends = self.ctx.config.friends() if hasattr(self.ctx.config, "friends") else {}
+        extra = {}
+        if self.cfg.get("blue_flags", True) or friends:
+            for r in snap.cars:
+                blue = bool(race and self.cfg.get("blue_flags", True) and r.flag_bits & 0x20 and not r.is_me)
+                fc = friends.get(r.user_id) if r.user_id and not r.is_me else None
+                if blue or fc:
+                    extra[r.idx] = (blue, fc)
+        self._extra = extra
+        ex_key = tuple(sorted(extra.items()))
         rec = None if pts is not None else (bool(tm.get("recording")), round(float(tm.get("progress", 0.0)), 2))
         self._meta = tuple((c[0], c[2], c[3], c[4], c[5], c[6]) for c in cars)
         if self.fast_active() and self._view is not None:  # padėtis atnaujina fast_tick
             self._view = (pts, self._view[1] if self._view[1] else tuple(cars), rec, tuple(snap.sectors or ()))
             return (id(pts) if pts is not None else None, self._meta, rec, self.width(), self.height(),
-                    self.cfg.get("mirror"), self.cfg.get("rotate"), self.cfg.get("numbers"), self.cfg.get("dot"))
+                    self.cfg.get("mirror"), self.cfg.get("rotate"), self.cfg.get("numbers"), self.cfg.get("dot"), ex_key)
         self._view = (pts, tuple(cars), rec, tuple(snap.sectors or ()))
         return (id(pts) if pts is not None else None, self._view[1], rec, self.width(), self.height(),
-                self.cfg.get("mirror"), self.cfg.get("rotate"), self.cfg.get("numbers"), self.cfg.get("dot"))
+                self.cfg.get("mirror"), self.cfg.get("rotate"), self.cfg.get("numbers"), self.cfg.get("dot"), ex_key)
 
     def desired_height(self) -> int:
         return self.width()
@@ -188,27 +200,62 @@ class TrackMapWidget(PanelWidget):
             p.setPen(QPen(pal.accent if i == 0 else QColor(255, 255, 255, 120), 2.5 * sc if i == 0 else 1.5 * sc))
             p.drawLine(QPointF(a.x() - nx, a.y() - ny), QPointF(a.x() + nx, a.y() + ny))
 
+    def _sprite(self, fill: QColor, rad: float, ring: str, sc: float):
+        """Mašinos taškas kaip paruoštas paveikslėlis: antialiasintas apskritimas kainuoja daug daugiau
+        nei paveikslėlio kopija, o žemėlapis piešiamas 30-60 kartų per sekundę."""
+        dpr = self.devicePixelRatioF()
+        key = (fill.rgba(), round(rad, 2), ring, round(sc, 3), dpr)
+        cache = self.__dict__.setdefault("_sprites", {})
+        pm = cache.get(key)
+        if pm is None:
+            from PySide6.QtGui import QPixmap
+            outer = rad + (2.5 * sc + 1.6 * sc if ring == "me" else 1.8 * sc + 1.2 * sc if ring else 1.2) + 1
+            size = int((outer * 2 + 2) * dpr) + 1
+            pm = QPixmap(size, size)
+            pm.setDevicePixelRatio(dpr)
+            pm.fill(Qt.GlobalColor.transparent)
+            q = QPainter(pm)
+            q.setRenderHint(QPainter.RenderHint.Antialiasing)
+            c = QPointF(size / dpr / 2, size / dpr / 2)
+            q.setPen(QPen(QColor(0, 0, 0, 200), 1.2))
+            q.setBrush(fill)
+            q.drawEllipse(c, rad, rad)
+            q.setBrush(Qt.BrushStyle.NoBrush)
+            if ring == "me":
+                q.setPen(QPen(QColor(255, 255, 255), 1.6 * sc))
+                q.drawEllipse(c, rad + 2.5 * sc, rad + 2.5 * sc)
+            elif ring == "leader":
+                q.setPen(QPen(QColor(255, 255, 255, 200), 1.2 * sc))
+                q.drawEllipse(c, rad + 1.8 * sc, rad + 1.8 * sc)
+            elif ring == "blue":
+                q.setPen(QPen(QColor(40, 130, 255), 2.2 * sc))
+                q.drawEllipse(c, rad + 2.0 * sc, rad + 2.0 * sc)
+            elif ring == "friend":
+                q.setPen(QPen(fill.lighter(150), 1.4 * sc))
+                q.drawEllipse(c, rad + 1.8 * sc, rad + 1.8 * sc)
+            q.end()
+            if len(cache) > 300:
+                cache.clear()
+            cache[key] = pm
+        return pm
+
     def _paint_cars(self, p, xy, cars, sc):
         pal = self.pal
         dot = 4.2 * sc * float(self.cfg.get("dot", 1.0) or 1.0)
         numbers = self.cfg.get("numbers")
+        dpr = self.devicePixelRatioF()
+        extra = getattr(self, "_extra", {})
         for idx, prog, color, number, me, in_pit, leader in cars:
             c = self._at(xy, prog)
-            col = QColor(pal.class_color(color)) if color else QColor(pal.text)
+            ex = extra.get(idx)
+            col = QColor(ex[1]) if ex and ex[1] else (QColor(pal.class_color(color)) if color else QColor(pal.text))
             if in_pit:
                 col.setAlpha(110)
             rad = dot * (1.6 if me else 1.0)
-            p.setPen(QPen(QColor(0, 0, 0, 200), 1.2))
-            p.setBrush(pal.accent if me else col)
-            p.drawEllipse(c, rad, rad)
-            if me:
-                p.setPen(QPen(QColor(255, 255, 255), 1.6 * sc))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawEllipse(c, rad + 2.5 * sc, rad + 2.5 * sc)
-            elif leader:
-                p.setPen(QPen(QColor(255, 255, 255, 200), 1.2 * sc))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawEllipse(c, rad + 1.8 * sc, rad + 1.8 * sc)
+            ring = "me" if me else ("blue" if ex and ex[0] else ("leader" if leader else ("friend" if ex and ex[1] else "")))
+            pm = self._sprite(pal.accent if me else col, rad, ring, sc)
+            half = pm.width() / dpr / 2
+            p.drawPixmap(QPointF(c.x() - half, c.y() - half), pm)
             if numbers and not in_pit:
                 p.setPen(pal.text)
                 self.draw_text(p, QRectF(c.x() + rad + 2, c.y() - 7, 40, 14), number, "tiny")
@@ -255,19 +302,19 @@ class FlatMapWidget(TrackMapWidget):
             p.drawLine(QPointF(x, yl - 6 * sc), QPointF(x, yl + 6 * sc))
         dot = 4.2 * sc * float(self.cfg.get("dot", 1.0) or 1.0)
         numbers = self.cfg.get("numbers")
+        dpr = self.devicePixelRatioF()
+        extra = getattr(self, "_extra", {})
         for idx, prog, color, number, me, in_pit, leader in cars:
             x = xpos(prog)
-            col = QColor(pal.class_color(color)) if color else QColor(pal.text)
+            ex = extra.get(idx)
+            col = QColor(ex[1]) if ex and ex[1] else (QColor(pal.class_color(color)) if color else QColor(pal.text))
             if in_pit:
                 col.setAlpha(110)
             rad = dot * (1.5 if me else 1.0)
-            p.setPen(QPen(QColor(0, 0, 0, 200), 1.2))
-            p.setBrush(pal.accent if me else col)
-            p.drawEllipse(QPointF(x, yl), rad, rad)
-            if me:
-                p.setPen(QPen(QColor(255, 255, 255), 1.6 * sc))
-                p.setBrush(Qt.BrushStyle.NoBrush)
-                p.drawEllipse(QPointF(x, yl), rad + 2.5 * sc, rad + 2.5 * sc)
+            ring = "me" if me else ("blue" if ex and ex[0] else ("friend" if ex and ex[1] else ""))
+            pm = self._sprite(pal.accent if me else col, rad, ring, sc)
+            half = pm.width() / dpr / 2
+            p.drawPixmap(QPointF(x - half, yl - half), pm)
             if numbers and not in_pit:
                 p.setPen(pal.accent if me else pal.dim)
                 self.draw_text(p, QRectF(x - 20, yl + rad + 2, 40, self.fonts.em_small * 1.2), number, "tiny", "c")

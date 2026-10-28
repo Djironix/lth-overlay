@@ -446,6 +446,20 @@ class WidgetDetailPage(Page):
         b_layout.clicked.connect(lambda: center.go("layout", select=name))
         pv.add(hbox(b_show, b_layout, None))
         right.addWidget(pv)
+        obs = getattr(self.ctx, "obs", None)
+        if obs is not None:  # OBS nuoroda tiesiai valdiklio puslapyje
+            oc = Card("OBS browser source", "Paste this URL in OBS: Sources > + > Browser.")
+            self.obs_url = QLineEdit(f"{obs.base_url()}/w/{name}")
+            self.obs_url.setReadOnly(True)
+            b_copy = button("Copy", "ghost", "copy")
+            b_copy.clicked.connect(self._copy_obs)
+            oc.add(hbox(self.obs_url, b_copy))
+            self.obs_state = label("", "faint", wrap=True)
+            self.b_obs_on = button("Turn on", None, "broadcast")
+            self.b_obs_on.clicked.connect(self._obs_on)
+            oc.add(hbox(self.obs_state, None, self.b_obs_on))
+            right.addWidget(oc)
+            self._obs_state()
         hint = Card("Tips")
         tips = ["Drag the widget on screen in edit mode. Corners scale it, edges change width or height.",
                 "Ctrl + mouse wheel over a widget changes its size.",
@@ -465,6 +479,25 @@ class WidgetDetailPage(Page):
     @property
     def cfg(self):
         return self.ctx.config.widget(self.name)
+
+    def _copy_obs(self):
+        from PySide6.QtGui import QGuiApplication
+        self.obs_url.setText(f"{self.ctx.obs.base_url()}/w/{self.name}")
+        QGuiApplication.clipboard().setText(self.obs_url.text())
+        self.obs_state.setText("Copied. " + ("" if self.ctx.obs.running() else "Turn the OBS server on first."))
+
+    def _obs_on(self):
+        self.ctx.obs.cfg["enabled"] = True
+        self.ctx.obs.apply()
+        self.ctx.save_config_soon()
+        self._obs_state()
+
+    def _obs_state(self):
+        obs = self.ctx.obs
+        on = obs.running()
+        self.obs_url.setText(f"{obs.base_url()}/w/{self.name}")
+        self.obs_state.setText("OBS server is on." if on else (obs.error or "OBS server is off (Stream page)."))
+        self.b_obs_on.setVisible(not on)
 
     def _edit_on_screen(self):
         if not self.cfg.get("visible"):
@@ -488,6 +521,8 @@ class WidgetDetailPage(Page):
         self.form.refresh_geometry()
         self._refresh_preview()
         self._timer.start()
+        if hasattr(self, "obs_state"):
+            self._obs_state()
 
     def hideEvent(self, e):
         self._timer.stop()
@@ -1254,6 +1289,22 @@ class PerformancePage(Page):
         row.addWidget(c1)
         row.addWidget(c2)
         self.content.addLayout(row)
+        eco = Card("Eco mode", "Caps how often the smooth widgets (Inputs, track maps, Dash, Delta bar, Lap timer) "
+                               "redraw. Lower = less CPU and less work for Windows while iRacing runs.")
+        seg = Segmented({"0": "Off", "30": "30 fps", "20": "20 fps"},
+                        str(int(self.ctx.config.data.get("fps_cap", 0) or 0)))
+        seg.changed.connect(self._fps_cap)
+        eco.add(SettingRow("Smooth widgets max", seg, "Standing still (garage, pits, after the finish) they "
+                                                      "always slow down to 12 fps."))
+        self.content.addWidget(eco)
+        wc = Card("Per widget", "CPU used by each visible widget for drawing (share of one core).")
+        self.w_grid = QGridLayout()
+        self.w_grid.setHorizontalSpacing(16)
+        self.w_grid.setVerticalSpacing(4)
+        wc.add(self.w_grid)
+        self.content.addWidget(wc)
+        self._wcost = {}
+        self._wcost_t = None
         tips = Card("How it stays light")
         for t in ("Widgets are redrawn only when a number they show actually changes.",
                   "Each widget has its own refresh rate: Relative 10× per second, Standings 2×, Weather once.",
@@ -1278,6 +1329,36 @@ class PerformancePage(Page):
         h = self.ctx.perf_hist
         self.ch_cpu.set_values([x[0] for x in h])
         self.ch_fps.set_values([x[2] for x in h])
+        self._widget_costs()
+
+    def _fps_cap(self, v):
+        self.ctx.config.data["fps_cap"] = int(v)
+        self.ctx.save_config_soon()
+        for w in self.ctx.widgets.values():
+            w._update_fast()
+
+    def _widget_costs(self):
+        import time as _t
+        now = _t.perf_counter()
+        cur = {n: w.cost_s for n, w in self.ctx.widgets.items()}
+        prev, pt = self._wcost, self._wcost_t
+        self._wcost, self._wcost_t = cur, now
+        if pt is None or now - pt < 0.3:
+            return
+        dt = now - pt
+        rows = [(100.0 * (cur[n] - prev.get(n, cur[n])) / dt, n) for n, w in self.ctx.widgets.items()
+                if w.isVisible()]
+        rows.sort(reverse=True)
+        clear_layout(self.w_grid)
+        if not rows:
+            self.w_grid.addWidget(label("No widgets on screen right now.", "faint"), 0, 0)
+            return
+        for i, (pct, n) in enumerate(rows[:12]):
+            self.w_grid.addWidget(label(BY_NAME[n].title), i, 0)
+            self.w_grid.addWidget(label(f"{pct:.1f}%", "h3" if pct >= 3 else "muted"), i, 1)
+            hz = self.ctx.widgets[n].fast_hz()
+            self.w_grid.addWidget(label(f"smooth {hz} fps" if hz else "", "faint"), i, 2)
+        self.w_grid.setColumnStretch(2, 1)
 
 
 # ====================================================================== Diagnostics
