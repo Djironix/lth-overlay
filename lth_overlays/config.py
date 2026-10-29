@@ -17,7 +17,7 @@ APP_DIR_NAME = "LTH Overlays"
 from .registry import (DEFAULT_WIDGETS, ENGINEER_TYPES, RELATIVE_COLUMNS,  # noqa: E402,F401
                        STANDINGS_COLUMNS, WEATHER_FIELDS)
 
-CONFIG_VERSION = 8
+CONFIG_VERSION = 9
 
 DEFAULT_CONFIG = {
     "version": CONFIG_VERSION,
@@ -39,7 +39,7 @@ DEFAULT_CONFIG = {
     "open_control_center": True,
     "onboarding_done": False,  # pirmo paleidimo tutorialas  # atidaryti Control Center paleidus ranka
     "fps_cap": 0,  # Eco: visų „smooth“ valdiklių fps riba (0 = be ribos)
-    "telemetry": {"record": True, "hz": 30, "auto_save_best": True},  # savo ratų telemetrija
+    "telemetry": {"record": True, "hz": 30, "auto_save_best": True, "save_sessions": True},  # savo ratų telemetrija
     "obs": {"enabled": False, "port": 8399, "fps": 30},  # OBS Browser Source serveris (tik 127.0.0.1)
     "snap": True,  # prilipimas prie tinklelio ir kitų valdiklių
     "profiles": {
@@ -104,9 +104,9 @@ class Config:
                         wc.pop("lth_only", None)
                         if wc.pop("race_only", False) and "sessions" not in wc:  # v7: matomumas pagal sesiją
                             wc["sessions"] = {"practice": False, "qualify": False, "warmup": False, "race": True}
-            if ver < 8:  # v0.6.1: mažiau CPU - nauji numatyti greito kelio dažniai (jei vartotojas nekeitė)
-                for prof in (raw.get("profiles") or {}).values():
-                    ws = (prof or {}).get("widgets") or {}
+            for prof in (raw.get("profiles") or {}).values():
+                ws = (prof or {}).get("widgets") or {}
+                if ver < 8:  # v0.6.1: mažiau CPU - nauji numatyti greito kelio dažniai (jei vartotojas nekeitė)
                     for name, old_hz, new_hz in (("lap_timer", 30, 10), ("track_map", 60, 30), ("flat_map", 60, 30)):
                         wc = ws.get(name)
                         if isinstance(wc, dict) and wc.get("smooth_hz") == old_hz:
@@ -115,6 +115,10 @@ class Config:
                         wc = ws.get(name)
                         if isinstance(wc, dict) and wc.get("column_header") is False:
                             wc["column_header"] = True
+                if ver < 9:  # v0.6.2: drėgmė rodoma numatytai
+                    wf = (ws.get("weather") or {}).get("fields")
+                    if isinstance(wf, dict) and wf.get("humidity") is False:
+                        wf["humidity"] = True
             # v5: nauji valdikliai ir laukai ateina iš numatytų reikšmių (_merge)
             raw["version"] = CONFIG_VERSION
             self.data = _merge(DEFAULT_CONFIG, raw)

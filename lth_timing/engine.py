@@ -141,6 +141,7 @@ class Snapshot:
     sof: dict = field(default_factory=dict)  # klasė -> SOF (0 = bendras)
     rain_call: object = None  # rain_tips.RainCall arba None
     incident_limit: int = 0  # iš sesijos (0 = neribota)
+    track_usage: str = ""  # SessionTrackRubberState šios sesijos pradžioje
     track_key: str = ""
     car_key: str = ""
     my_sectors: object = None  # laps.SectorState
@@ -233,7 +234,8 @@ class TimingEngine:
         self.recorder.set_session({"track": model.track_name, "track_key": model.track_key,
                                    "track_config": model.track_config, "car": model.car_path,
                                    "car_name": me.car_name if me else "", "driver": me.name if me else "",
-                                   "track_m": model.track_length_m}, model.track_length_m)
+                                   "track_m": model.track_length_m, "subsession": model.subsession_id},
+                                  model.track_length_m)
 
     # ------------------------------------------------------------------
     # Kadro apdorojimas (60 Hz)
@@ -246,6 +248,9 @@ class TimingEngine:
         self.stats["frames"] += 1
         self.player.sample_inputs(f)
         pl = f.PlayerCarIdx
+        m0 = self.session
+        sn = f.SessionNum
+        self.recorder.session = (m0.session_type(sn) if m0 else "", int(sn) if sn is not None else -1)
         self.recorder.sample(f, bool(f.IsOnTrack) and not bool(f.IsReplayPlaying) and pl is not None and pl >= 0)
         t = float(f.SessionTime)
         num = f.SessionNum
@@ -523,6 +528,8 @@ class TimingEngine:
             self._derived = dc
         snap.sof, snap.battle, snap.pit, snap.ir_change = dc[1], dc[2], dc[3], dc[4]
         snap.incident_limit = m.incident_limit if m else 0
+        sd = m.sessions.get(f.SessionNum) if m else None
+        snap.track_usage = sd.rubber if sd is not None else ""
         snap.track_key = m.track_key if m else ""
         snap.car_key = m.car_path if m else ""
         snap.my_sectors = self.my_sectors.state()

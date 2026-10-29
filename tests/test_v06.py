@@ -328,3 +328,77 @@ def test_recorder_keeps_lap_on_session_info_update(engine):
     buf = len(r._buf)
     r.set_session(dict(r.meta), r.track_m)  # tas pats trasa / mašina - einamasis ratas lieka
     assert len(r.laps) == n and len(r._buf) == buf
+
+
+# ---------------------------------------------------------------- v0.6.2
+def test_trace_decimation_is_stable_and_keeps_spikes():
+    from lth_overlays.widgets.wheel import decimate
+    sig = np.zeros(3000)
+    sig[1500] = 1.0  # vieno mėginio pikas
+    for seq in range(1500, 1700):
+        win = sig[seq - 239:seq + 1]
+        assert 1.0 in decimate(win, seq, 60)[1].tolist()
+    a = set((decimate(sig[1000 - 239:1001], 1000, 60)[0] + 1000 - 239).tolist())
+    b = set((decimate(sig[1001 - 239:1002], 1001, 60)[0] + 1001 - 239).tolist())
+    assert len(a ^ b) <= 4  # kadras po kadro keičiasi tik kraštiniai taškai
+
+
+def test_gt3_wheel_turns_the_right_way(qapp):
+    from PySide6.QtCore import QPointF
+    from PySide6.QtGui import QImage, QPainter
+    from lth_overlays.widgets.wheel import GT3Wheel
+
+    def red_x(steer):
+        img = QImage(200, 200, QImage.Format.Format_ARGB32_Premultiplied)
+        img.fill(0)
+        p = QPainter(img)
+        GT3Wheel().draw(p, QPointF(100, 100), 160, steer, 1.0)
+        p.end()
+        xs = [x for y in range(0, 100) for x in range(200)
+              if (lambda c: c.red() > 180 and c.green() < 80 and c.blue() < 80)(img.pixelColor(x, y))]
+        return sum(xs) / len(xs)
+
+    assert abs(red_x(0.0) - 100) < 4  # žymė viršuje
+    assert red_x(0.8) < 90  # iRacing: teigiamas = į kairę -> žymė pasislenka kairėn
+    assert red_x(-0.8) > 110
+
+
+def test_track_usage_text():
+    from lth_overlays.widgets.weather import cardinal, track_usage_text
+    assert track_usage_text("moderately low usage") == "Moderately low (2/5)"
+    assert track_usage_text("high usage") == "High (5/5)"
+    assert track_usage_text("carry over") == "Carried over"
+    assert track_usage_text("") == ""
+    import math
+    assert cardinal(0) == "N" and cardinal(math.radians(90)) == "E" and cardinal(math.radians(225)) == "SW"
+
+
+def test_sessions_saved_listed_and_loaded(engine, tmp_path):
+    from lth_overlays.sessions import SessionStore
+    st = SessionStore(str(tmp_path / "sessions"))
+    n = st.observe(engine.recorder)
+    assert n == len([x for x in engine.recorder.laps if x.has_trace])
+    assert st.observe(engine.recorder) == 0  # tas pats - antrą kartą nerašo
+    items = st.list()
+    assert len(items) == 1 and items[0][1]["type"] == "race" and items[0][1]["best"]
+    laps = SessionStore.load(items[0][0])
+    assert len(laps) == n and "abs" in laps[0].data
+
+
+def test_suggested_driver_lists_are_optional(oapp, qapp):
+    from lth_overlays.control.drivers_page import SUGGESTED, suggested_drivers
+    drivers = suggested_drivers()
+    assert len(drivers) == 112 and len({d["id"] for d in drivers}) == 112
+    oapp.config.data["onboarding_done"] = True
+    assert not oapp.config.data.get("friends")  # numatytai niekas nepažymėtas
+    oapp.open_control_center()
+    oapp.control.go("drivers")
+    qapp.processEvents()
+    dp = oapp.control._pages["drivers"]
+    dp.tag(1372638, "Audrius Bakutis", "team")  # pačio pažymėtas lieka
+    dp._toggle_list("hub")
+    f = oapp.config.data["friends"]
+    assert f["1372638"]["tag"] == "team" and len(f) == 112
+    dp._toggle_list("hub")
+    assert list(oapp.config.data["friends"]) == ["1372638"]
+    oapp.control.hide()

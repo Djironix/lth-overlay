@@ -112,7 +112,7 @@ class SimRace:
             if c not in m.classes:
                 m.classes[c] = {"name": CLASSES[c]["name"], "color": CLASSES[c]["color"],
                                 "est_lap": self.track_m / 45.0 / CLASSES[c]["pace"]}
-        m.sessions[0] = SessionDesc(num=0, type="race", name="RACE", laps="unlimited")
+        m.sessions[0] = SessionDesc(num=0, type="race", name="RACE", laps="unlimited", rubber="moderately low usage")
         m.sectors = [0.0, 0.28, 0.61]
         m.track_id = 999
         m.car_path = m.drivers[self.me].car_path if self.me in m.drivers else ""

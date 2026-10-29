@@ -259,6 +259,9 @@ class OverlayApp(QObject):
         from .chat import ChatHub
         from .obs import ObsServer
         self.chat = ChatHub()
+        from .sessions import SessionStore
+        self.sessions = SessionStore(os.path.join(os.path.dirname(config.path) if getattr(config, "path", None)
+                                                  else app_dir(), "sessions"))
         from .pb import PersonalBests
         self.pbs = PersonalBests(os.path.join(os.path.dirname(config.path), "pb.json")
                                  if getattr(config, "path", None) else None)
@@ -527,6 +530,10 @@ class OverlayApp(QObject):
                     tm = getattr(self.engine.timing, "trackmap", None)
                     autosave_best(getattr(self.engine.timing, "recorder", None), self.__dict__.setdefault("_tel_state", {}),
                                   tm.points if tm is not None else None)
+                if (self.config.data.get("telemetry") or {}).get("save_sessions", True):
+                    tm = getattr(self.engine.timing, "trackmap", None)
+                    self.sessions.observe(getattr(self.engine.timing, "recorder", None),
+                                          tm.points if tm is not None else None)
             self._auto_profile(snap)
             self._apply_class_colors(snap)
         self._refresh_visibility(snap=snap)

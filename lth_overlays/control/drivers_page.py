@@ -7,7 +7,23 @@ from .components import Card, ColorButton, Combo, button, clear_layout, label
 from .pages import Page
 
 TAGS = {"friend": ("Friend", "#ECBE58"), "team": ("Teammate", "#3DDC97"), "rival": ("Rival", "#FF8A1E"),
-        "careful": ("Careful", "#FF4D5E"), "fast": ("Fast", "#B48CFF")}
+        "careful": ("Careful", "#FF4D5E"), "fast": ("Fast", "#B48CFF"), "lth": ("LTH", "#F2C94C"),
+        "hub": ("iRacing Hub", "#5FD3C6")}  # ne mėlyna: mėlyna Relative reiškia lenkiamą mašiną
+# Siūlomi sąrašai (neįjungti numatytai): raktas -> (pavadinimas, žyma, filtras)
+SUGGESTED = (("lth", "LTH team", "lth", lambda d: d.get("team", "").strip().upper() == "LTH"),
+             ("hub", "Lietuvos iRacing Hub", "hub", lambda d: True))
+
+
+def suggested_drivers() -> list:
+    """Patikrintas Lietuvos iRacing Hub narių sąrašas (iracing.lt) - [{id, name, team}]."""
+    import json
+    import os
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "drivers_lt.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            return list(json.load(fh).get("drivers") or [])
+    except (OSError, ValueError):
+        return []
 
 
 class DriversPage(Page):
@@ -35,6 +51,14 @@ class DriversPage(Page):
         self.tagged.add(add)
         self.content.addWidget(self.tagged)
 
+        self.sugg = Card("Suggested lists", "Optional. Mark everyone from the LTH team or the whole Lithuanian "
+                                            "iRacing Hub at once. Drivers you tagged yourself keep your tag.")
+        self.sugg_grid = QGridLayout()
+        self.sugg_grid.setHorizontalSpacing(12)
+        self.sugg_grid.setVerticalSpacing(8)
+        self.sugg.add(self.sugg_grid)
+        self.content.addWidget(self.sugg)
+
         self.session = Card("In this session", "Click Tag to add a driver from the current session.")
         self.sess_grid = QGridLayout()
         self.sess_grid.setHorizontalSpacing(10)
@@ -43,6 +67,7 @@ class DriversPage(Page):
         self.content.addWidget(self.session)
         self.content.addStretch(1)
         self._sess_key = None
+        self._fill_suggested()
         self._fill_tagged()
 
     # ---- duomenys ----
@@ -88,10 +113,49 @@ class DriversPage(Page):
         self._save()
 
     # ---- UI ----
+    # ---- siūlomi sąrašai ----
+    def _list_count(self, key) -> int:
+        return sum(1 for v in self.friends.values() if isinstance(v, dict) and v.get("src") == key)
+
+    def _fill_suggested(self):
+        clear_layout(self.sugg_grid)
+        drivers = suggested_drivers()
+        for r, (key, title, tag, flt) in enumerate(SUGGESTED):
+            members = [d for d in drivers if flt(d)]
+            on = self._list_count(key)
+            self.sugg_grid.addWidget(label(title, "h3"), r, 0)
+            self.sugg_grid.addWidget(label(f"{len(members)} drivers" + (f" · {on} marked" if on else ""), "faint"), r, 1)
+            b = button("Remove" if on else "Add", "ghost" if on else None, "trash" if on else "plus")
+            b.clicked.connect(lambda _=False, k=key: self._toggle_list(k))
+            self.sugg_grid.addWidget(b, r, 2)
+        self.sugg_grid.setColumnStretch(1, 1)
+
+    def _toggle_list(self, key):
+        spec = next(x for x in SUGGESTED if x[0] == key)
+        if self._list_count(key):
+            for uid in [u for u, v in self.friends.items() if isinstance(v, dict) and v.get("src") == key]:
+                self.friends.pop(uid, None)
+        else:
+            _, _, tag, flt = spec
+            for d in suggested_drivers():
+                uid = str(d.get("id") or "")
+                if not uid or not flt(d):
+                    continue
+                cur = self.friends.get(uid)
+                if cur and not (isinstance(cur, dict) and cur.get("src")):
+                    continue  # paties pažymėtas - nekeičiam
+                if cur and isinstance(cur, dict) and cur.get("src") == "lth" and key == "hub":
+                    continue  # LTH žyma svarbesnė už bendrą Hub
+                self.friends[uid] = {"name": d.get("name", uid), "tag": tag, "color": TAGS[tag][1], "src": key}
+        self._save()
+        self._fill_suggested()
+        self._fill_tagged()
+        self._fill_session(force=True)
+
     def _fill_tagged(self):
         clear_layout(self.tag_grid)
-        items = sorted(self.friends.items(), key=lambda kv: str((kv[1] or {}).get("name", "")).lower()
-                       if isinstance(kv[1], dict) else "")
+        items = sorted(((u, v) for u, v in self.friends.items() if not (isinstance(v, dict) and v.get("src"))),
+                       key=lambda kv: str((kv[1] or {}).get("name", "")).lower() if isinstance(kv[1], dict) else "")
         if not items:
             self.tag_grid.addWidget(label("Nobody tagged yet.", "faint"), 0, 0)
             return
@@ -126,7 +190,8 @@ class DriversPage(Page):
                                      0, 0, 1, 4)
         for i, r in enumerate(sorted(cars, key=lambda x: x.name.lower())):
             row = i + 1
-            tagged = str(r.user_id) in self.friends
+            cur = self.friends.get(str(r.user_id))
+            tagged = bool(cur) and not (isinstance(cur, dict) and cur.get("src"))
             b = button("Tagged" if tagged else "Tag", "ghost", "check" if tagged else "star")
             b.setEnabled(not tagged and live)
             b.clicked.connect(lambda _=False, u=r.user_id, n=r.name: self.tag(u, n))
@@ -137,6 +202,7 @@ class DriversPage(Page):
         self.sess_grid.setColumnStretch(0, 1)
 
     def on_show(self):
+        self._fill_suggested()
         self._fill_tagged()
         self._fill_session()
 

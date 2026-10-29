@@ -90,11 +90,12 @@ class TraceView(QWidget):
     Kiekvienas ratas turi savo spalvą visuose grafikuose (A - auksinė, B - mėlyna)."""
 
     PANELS = (("delta", "Delta", 1.0), ("speed", "Speed", 1.6), ("throttle", "Throttle", 0.85),
-              ("brake", "Brake", 0.85), ("steer", "Steering", 0.8), ("gear", "Gear", 0.65))
+              ("brake", "Brake", 0.85), ("abs", "ABS", 0.40), ("steer", "Steering", 0.8), ("gear", "Gear", 0.65))
     GAP = 24
     TOP = 26  # legenda
 
     hovered = Signal(float)  # rato dalis 0..1, -1 = pelė ne ant grafiko
+    zoomed = Signal(float, float)  # rodoma rato dalis (nuo, iki)
 
     def __init__(self):
         super().__init__()
@@ -115,9 +116,7 @@ class TraceView(QWidget):
         self.update()
 
     def reset_zoom(self):
-        self.x0, self.x1 = 0.0, 1.0
-        self._cache = None
-        self.update()
+        self.set_range(0.0, 1.0)
 
     # ---- geometrija ----
     def _rects(self):
@@ -145,6 +144,28 @@ class TraceView(QWidget):
         xs = rect.left() + (g - self.x0) / (self.x1 - self.x0) * rect.width()
         ys = rect.bottom() - (np.clip(v, lo, hi) - lo) / (hi - lo or 1) * rect.height()
         return QPolygonF([QPointF(float(x), float(y)) for x, y in zip(xs, ys)])
+
+    def _fill_runs(self, p, grid, mask, rect, color):
+        """Užpildo stačiakampius ten, kur mask True (matomame rato intervale)."""
+        from ..widgets.wheel import runs
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(color)
+        span = self.x1 - self.x0
+        for i0, i1 in runs(mask):
+            g0, g1 = float(grid[max(0, i0)]), float(grid[min(len(grid) - 1, i1)])
+            if g1 < self.x0 or g0 > self.x1:
+                continue
+            x0 = rect.left() + (max(g0, self.x0) - self.x0) / span * rect.width()
+            x1 = rect.left() + (min(g1, self.x1) - self.x0) / span * rect.width()
+            p.drawRect(QRectF(x0, rect.top(), max(1.5, x1 - x0), rect.height()))
+
+    def set_range(self, x0, x1):
+        span = min(1.0, max(0.002, x1 - x0))  # iki ~10 m - linijos „išsitempia“
+        x0 = min(max(0.0, x0), 1.0 - span)
+        self.x0, self.x1 = x0, x0 + span
+        self._cache = None
+        self.update()
+        self.zoomed.emit(self.x0, self.x1)
 
     # ---- piešimas ----
     def _legend(self, p):
@@ -177,7 +198,7 @@ class TraceView(QWidget):
             p.setBrush(qcolor("bg"))
             p.drawRoundedRect(rect.adjusted(-4, -3, 4, 3), 6, 6)
             p.setPen(QPen(qcolor("border"), 1))
-            for k in (0.25, 0.5, 0.75):  # tinklelis
+            for k in ((0.25, 0.5, 0.75) if key != "abs" else ()):  # tinklelis
                 yy = rect.bottom() - rect.height() * k
                 p.drawLine(QPointF(rect.left(), yy), QPointF(rect.right(), yy))
             p.setPen(qcolor("muted"))
@@ -219,6 +240,27 @@ class TraceView(QWidget):
                     p.setPen(QPen(qcolor("text"), 1.6))
                     p.drawPolyline(poly)
                 continue
+            if key == "abs":  # kur veikė ABS: atskira juosta kiekvienam ratui jo spalva
+                laps = [(lap, col, nm) for lap, col, nm in ((a, COL_A, "A"), (b, COL_B, "B")) if lap is not None]
+                rh = rect.height() / max(1, len(laps))
+                for i, (lap, col, nm) in enumerate(laps):
+                    yy = rect.top() + i * rh
+                    v = T.channel_on(lap, g, "abs")
+                    p.setPen(col)
+                    p.drawText(QRectF(rect.left() + 4, yy, 14, rh), Qt.AlignmentFlag.AlignCenter, nm)
+                    p.setPen(qcolor("faint"))
+                    if v is None:
+                        p.drawText(QRectF(rect.left() + 24, yy, rect.width(), rh), Qt.AlignmentFlag.AlignVCenter,
+                                   "no ABS data (lap recorded before v0.6.2)")
+                        continue
+                    bar = QRectF(rect.left() + 22, yy + rh * 0.15, rect.width() - 22, rh * 0.70)
+                    p.fillRect(bar, QColor(255, 255, 255, 10))
+                    self._fill_runs(p, g, v > 0.5, QRectF(rect.left(), bar.top(), rect.width(), bar.height()), col)
+                continue
+            if key == "brake" and a is not None:  # oranžinis fonas ten, kur A rate veikė ABS
+                v = T.channel_on(a, g, "abs")
+                if v is not None:
+                    self._fill_runs(p, g, v > 0.5, rect, QColor(255, 140, 30, 55))
             lo, hi = {"speed": (0.0, None), "throttle": (0.0, 1.0), "brake": (0.0, 1.0),
                       "steer": (None, None), "gear": (0.0, None)}[key]
             series = [(lap, T.channel_on(lap, g, key)) for lap in (a, b) if lap is not None]
@@ -273,6 +315,14 @@ class TraceView(QWidget):
             self._cache = (key, self._paint_base())
         p = QPainter(self)
         p.drawPixmap(0, 0, self._cache[1])
+        sel = getattr(self, "_sel", None)
+        if sel is not None:  # pažymima vieta priartinimui
+            top, bottom = self._rects()[0][2], self._rects()[-1][2]
+            a_, b_ = sorted(sel)
+            p.fillRect(QRectF(a_, top.top(), b_ - a_, bottom.bottom() - top.top()), QColor(236, 190, 88, 40))
+            p.setPen(QPen(COL_A, 1))
+            p.drawLine(QPointF(a_, top.top()), QPointF(a_, bottom.bottom()))
+            p.drawLine(QPointF(b_, top.top()), QPointF(b_, bottom.bottom()))
         gx = self.hover_pct()
         if gx is None:
             return
@@ -326,13 +376,29 @@ class TraceView(QWidget):
 class TrackMini(QWidget):
     """Trasos kontūras šalia grafikų: kur tiksliai trasoje yra pelė ir kur B laimi (žalia) / pralaimi (raudona)."""
 
+    clicked = Signal(float)  # spustelėta trasos vieta (rato dalis)
+
     def __init__(self):
         super().__init__()
         self.points = None
         self.a = self.b = None
         self.pos = None
+        self.range = (0.0, 1.0)
         self._cache = None
-        self.setFixedSize(300, 300)
+        self.setFixedSize(280, 280)
+        self.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.setToolTip("Click a corner to zoom the graphs there")
+
+    def set_range(self, x0, x1):
+        self.range = (x0, x1)
+        self.update()
+
+    def mousePressEvent(self, e):
+        xy = self._xy()
+        d = (xy[:, 0] - e.position().x()) ** 2 + (xy[:, 1] - e.position().y()) ** 2
+        i = int(np.argmin(d))
+        if d[i] < 30 ** 2:
+            self.clicked.emit(i / len(xy))
 
     def set_data(self, points, a, b):
         self.points = None if points is None else np.asarray(points, dtype=float)
@@ -424,9 +490,16 @@ class TrackMini(QWidget):
             self._cache = (key, self._base())
         p = QPainter(self)
         p.drawPixmap(0, 0, self._cache[1])
+        p.setRenderHint(QPainter.RenderHint.Antialiasing)
+        x0, x1 = self.range
+        if x1 - x0 < 0.999:  # priartinta atkarpa - balta
+            xy = self._xy()
+            pts = [self._at(xy, g) for g in np.linspace(x0, x1, max(4, int((x1 - x0) * 400) + 2))]
+            p.setPen(QPen(QColor(255, 255, 255, 230), 7, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                          Qt.PenJoinStyle.RoundJoin))
+            p.drawPolyline(QPolygonF(pts))
         if self.pos is None:
             return
-        p.setRenderHint(QPainter.RenderHint.Antialiasing)
         c = self._at(self._xy(), self.pos)
         p.setPen(QPen(QColor(15, 16, 20), 2))
         p.setBrush(COL_A)
@@ -437,28 +510,49 @@ class TrackMini(QWidget):
 
 
     # ---- pelė ----
+    # Kaip Garage61: tempk per grafiką - priartina tą vietą; ratukas - artinti / tolinti;
+    # dešinys pelės mygtukas arba Shift + tempimas - stumti; dvigubas spustelėjimas - visas ratas.
+    def _gx_at(self, x):
+        r = self._rects()[0][2]
+        return self.x0 + (x - r.left()) / r.width() * (self.x1 - self.x0)
+
     def mouseMoveEvent(self, e):
         x = e.position().x()
         if self._drag is not None:
             r = self._rects()[0][2]
             dx = (self._drag[0] - x) / r.width() * (self._drag[2] - self._drag[1])
             span = self._drag[2] - self._drag[1]
-            x0 = min(max(0.0, self._drag[1] + dx), 1.0 - span)
-            self.x0, self.x1 = x0, x0 + span
-            self._cache = None
+            self.set_range(self._drag[1] + dx, self._drag[1] + dx + span)
+        elif getattr(self, "_sel", None) is not None:
+            r = self._rects()[0][2]
+            self._sel = (self._sel[0], min(max(x, r.left()), r.right()))
         self._hover = x
         self.update()
         gx = self.hover_pct()
         self.hovered.emit(-1.0 if gx is None else float(gx))
 
     def mousePressEvent(self, e):
-        if e.button() == Qt.MouseButton.LeftButton:
-            self._drag = (e.position().x(), self.x0, self.x1)
+        x = e.position().x()
+        pan = e.button() in (Qt.MouseButton.RightButton, Qt.MouseButton.MiddleButton) or (
+            e.button() == Qt.MouseButton.LeftButton and e.modifiers() & Qt.KeyboardModifier.ShiftModifier)
+        if pan:
+            self._drag = (x, self.x0, self.x1)
+        elif e.button() == Qt.MouseButton.LeftButton and self.a is not None:
+            r = self._rects()[0][2]
+            if r.left() <= x <= r.right():
+                self._sel = (x, x)
 
     def mouseReleaseEvent(self, e):
         self._drag = None
+        sel = getattr(self, "_sel", None)
+        self._sel = None
+        if sel is not None and abs(sel[1] - sel[0]) > 6:
+            a_, b_ = sorted(sel)
+            self.set_range(self._gx_at(a_), self._gx_at(b_))
+        self.update()
 
     def mouseDoubleClickEvent(self, e):
+        self._sel = None
         self.reset_zoom()
 
     def leaveEvent(self, e):
@@ -467,15 +561,11 @@ class TrackMini(QWidget):
         self.hovered.emit(-1.0)
 
     def wheelEvent(self, e):
-        r = self._rects()[0][2]
-        gx = self.x0 + (e.position().x() - r.left()) / r.width() * (self.x1 - self.x0)
+        gx = self._gx_at(e.position().x())
         k = 0.8 if e.angleDelta().y() > 0 else 1.25
-        span = min(1.0, max(0.01, (self.x1 - self.x0) * k))
+        span = min(1.0, max(0.002, (self.x1 - self.x0) * k))
         x0 = gx - (gx - self.x0) * span / (self.x1 - self.x0)
-        x0 = min(max(0.0, x0), 1.0 - span)
-        self.x0, self.x1 = x0, x0 + span
-        self._cache = None
-        self.update()
+        self.set_range(x0, x0 + span)
         gx = self.hover_pct()
         self.hovered.emit(-1.0 if gx is None else float(gx))
 
@@ -500,7 +590,27 @@ class TelemetryPage(Page):
         seg = Segmented({"30": "30 Hz", "60": "60 Hz"}, str(int(d.get("hz", 30))))
         seg.changed.connect(lambda v: self._set("hz", int(v)))
         rec.add(SettingRow("Sample rate", seg, "60 Hz is more detailed in fast corners and costs a little more CPU."))
+        t_ses = Toggle(bool(d.get("save_sessions", True)))
+        t_ses.toggled.connect(lambda v: self._set("save_sessions", bool(v)))
+        rec.add(SettingRow("Save every session", t_ses, "Practice, qualifying and race laps are kept on this PC "
+                                                        "(last 50 sessions, about 2-3 MB per race)."))
         self.content.addWidget(rec)
+
+        ses = Card("Session")
+        srow = QHBoxLayout()
+        srow.setSpacing(10)
+        self.c_ses = Combo({"live": "Current session"}, "live", 460)
+        self.c_ses.changed.connect(self._pick_session)
+        srow.addWidget(self.c_ses)
+        b_sdir = button("Open sessions folder", "ghost", "folder")
+        b_sdir.clicked.connect(self._open_sessions)
+        srow.addStretch(1)
+        srow.addWidget(b_sdir)
+        ses.add(srow)
+        self.content.addWidget(ses)
+        self.source = "live"
+        self._past = {}  # aplankas -> ratai
+        self._ses_list_key = None
 
         rep = Card("Session report")
         self.kpis = QHBoxLayout()
@@ -514,7 +624,8 @@ class TelemetryPage(Page):
         rep.add(self.table)
         self.content.addWidget(rep)
 
-        cmp_ = Card("Compare laps", "Wheel to zoom, drag to move, double-click to see the whole lap.")
+        cmp_ = Card("Compare laps", "Drag across the graphs to zoom into that part of the lap (or click a corner on "
+                                    "the map). Mouse wheel zooms, right-drag moves, double-click shows the whole lap.")
         row = QHBoxLayout()
         row.setSpacing(10)
         self.c_a = Combo({}, None, 300)
@@ -548,13 +659,16 @@ class TelemetryPage(Page):
         self.trace = TraceView()
         self.mini = TrackMini()
         self.trace.hovered.connect(self.mini.set_pos)
+        self.trace.zoomed.connect(self.mini.set_range)
+        self.mini.clicked.connect(lambda g: self.trace.set_range(g - 0.03, g + 0.03))
         tr_row = QHBoxLayout()
         tr_row.setSpacing(14)
-        tr_row.addWidget(self.trace, 1)
         side = QVBoxLayout()
-        side.addWidget(self.mini)
+        side.addWidget(self.mini, 0, Qt.AlignmentFlag.AlignHCenter)
         side.addStretch(1)
         tr_row.addLayout(side)
+        tr_row.addWidget(self.trace, 1)
+        self.tr_row = tr_row
         cmp_.add(tr_row)
         self.content.addWidget(cmp_)
         self.content.addStretch(1)
@@ -568,9 +682,62 @@ class TelemetryPage(Page):
         self.ctx.config.data.setdefault("telemetry", {})[k] = v
         self.ctx.save_config_soon()
 
-    def _session_laps(self):
+    def _live_laps(self):
         r = self.recorder()
         return list(r.laps) if r is not None else []
+
+    def _session_laps(self):
+        if self.source != "live":
+            if self.source not in self._past:
+                from ..sessions import SessionStore
+                self._past[self.source] = SessionStore.load(self.source)
+            return self._past[self.source]
+        return self._live_laps()
+
+    def _store(self):
+        return getattr(self.ctx, "sessions", None)
+
+    def _open_sessions(self):
+        st = self._store()
+        if st is not None:
+            os.makedirs(st.root, exist_ok=True)
+            open_folder(st.root)
+
+    def _fill_sessions(self):
+        st = self._store()
+        items = st.list() if st is not None else []
+        key = tuple(f for f, _ in items)
+        if key == self._ses_list_key:
+            return
+        self._ses_list_key = key
+        cur = self.source
+        self.c_ses.blockSignals(True)
+        self.c_ses.clear()
+        self.c_ses._keys = ["live"]
+        self.c_ses.addItem("Current session", "live")
+        for folder, m in items:
+            n = len(m.get("laps") or {})
+            best = T.fmt(m.get("best")) if m.get("best") else "–"
+            kind = (m.get("type") or "session").capitalize()
+            txt = f"{(m.get('started') or '')[:16]}   {m.get('track') or ''}   {kind}   {n} laps   best {best}"
+            self.c_ses._keys.append(folder)
+            self.c_ses.addItem(txt, folder)
+        if cur in self.c_ses._keys:
+            self.c_ses.setCurrentIndex(self.c_ses._keys.index(cur))
+        self.c_ses.blockSignals(False)
+
+    def _pick_session(self, key):
+        self.source = key or "live"
+        self.trace.reset_zoom()
+        self._refresh(force=True)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        from PySide6.QtWidgets import QBoxLayout
+        narrow = self.viewport().width() < 1150  # mažesniame ekrane žemėlapis virš grafikų
+        d = QBoxLayout.Direction.TopToBottom if narrow else QBoxLayout.Direction.LeftToRight
+        if self.tr_row.direction() != d:
+            self.tr_row.setDirection(d)
 
     def _saved_best(self):
         r = self.recorder()
@@ -589,12 +756,17 @@ class TelemetryPage(Page):
     def _options(self):
         opts = []
         laps = self._session_laps()
+        past = self.source != "live"
         best = min((x.lap_time for x in laps if x.valid), default=None)
         for x in reversed(laps):
             if not x.has_trace:
                 continue
             tag = " · best" if x.valid and x.lap_time == best else ("" if x.valid else " · pit" if x.pit else " · invalid")
             opts.append((f"s{id(x)}", f"Lap {x.number}   {T.fmt(x.lap_time)}{tag}", x))
+        if past:  # lyginimui su seną sesiją - ir dabartinės sesijos ratai
+            for x in reversed(self._live_laps()):
+                if x.has_trace:
+                    opts.append((f"l{id(x)}", f"Now: lap {x.number}   {T.fmt(x.lap_time)}", x))
         sb = self._saved_best()
         if sb is not None:
             opts.append(("saved", f"My saved best   {T.fmt(sb.lap_time)}   ({sb.meta.get('date', '')[:10]})", sb))
@@ -613,7 +785,8 @@ class TelemetryPage(Page):
 
     def _refresh(self, force=False):
         r = self.recorder()
-        ver = (r.version if r is not None else -1, len(self.imported))
+        self._fill_sessions()
+        ver = (r.version if r is not None else -1, len(self.imported), self.source)
         if ver == self._ver and not force:
             return
         self._ver = ver

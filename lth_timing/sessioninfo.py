@@ -119,6 +119,7 @@ class SessionDesc:
     name: str
     laps: str
     results: list = field(default_factory=list)  # [{CarIdx, Position, ClassPosition, ...}]
+    rubber: str = ""  # SessionTrackRubberState: trasos guma sesijos pradžioje („moderate usage“...)
 
 
 @dataclass
@@ -138,6 +139,7 @@ class SessionModel:
     sessions: dict = field(default_factory=dict)  # num -> SessionDesc
     update: int = -1
     incident_limit: int = 0  # 0 = neribota / nežinoma
+    subsession_id: int = 0
     car_path: str = ""  # mano mašina (asmeniniam rekordui)
 
     @property
@@ -182,6 +184,7 @@ def build_model(data: dict, update: int = -1) -> SessionModel:
     m.league_id = int(_num(wi.get("LeagueID"), 0))
     m.series_id = int(_num(wi.get("SeriesID"), 0))
     m.team_racing = bool(int(_num(wi.get("TeamRacing"), 0)))
+    m.subsession_id = int(_num(wi.get("SubSessionID"), 0))
     lim = str((wi.get("WeekendOptions") or {}).get("IncidentLimit") or "")
     m.incident_limit = int(_num(lim, 0)) if lim.strip().isdigit() else 0
 
@@ -252,6 +255,7 @@ def build_model(data: dict, update: int = -1) -> SessionModel:
             name=str(s.get("SessionName") or ""),
             laps=str(s.get("SessionLaps") or ""),
             results=list(s.get("ResultsPositions") or []),
+            rubber=str(s.get("SessionTrackRubberState") or "").strip(),
         )
     me = m.drivers.get(m.driver_car_idx)
     m.car_path = me.car_path if me else ""

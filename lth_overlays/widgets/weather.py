@@ -9,6 +9,31 @@ from PySide6.QtGui import QPainter, QPen, QPolygonF
 from ..window import OverlayWidget
 
 
+RUBBER = {"clean": ("Clean", 0), "low usage": ("Low", 1), "moderately low usage": ("Moderately low", 2),
+          "moderate usage": ("Moderate", 3), "moderately high usage": ("Moderately high", 4),
+          "high usage": ("High", 5)}
+CARDINAL = ("N", "NE", "E", "SE", "S", "SW", "W", "NW")
+
+
+def track_usage_text(raw: str) -> str:
+    """iRacing SessionTrackRubberState -> „Moderately low (2/5)“. iRacing procentų neduoda - tik lygį
+    sesijos pradžioje, todėl rodom lygį iš 5."""
+    r = (raw or "").strip().lower()
+    if not r:
+        return ""
+    if r in RUBBER:
+        name, lvl = RUBBER[r]
+        return f"{name} ({lvl}/5)"
+    if "carry" in r:
+        return "Carried over"
+    return r.capitalize()
+
+
+def cardinal(rad: float) -> str:
+    deg = math.degrees(rad) % 360
+    return CARDINAL[int((deg + 22.5) // 45) % 8]
+
+
 def _clock(sec: float) -> str:
     sec = int(sec) % 86400
     return f"{sec // 3600:02d}:{(sec % 3600) // 60:02d}"
@@ -21,6 +46,7 @@ class WeatherWidget(OverlayWidget):
 
     def __init__(self, ctx):
         self._items = []
+        self._compass = None
         self._w = None
         super().__init__(ctx)
 
@@ -102,17 +128,25 @@ class WeatherWidget(OverlayWidget):
             items.append(("Rain", f"{w.precipitation * 100:.0f} %", "blue" if w.precipitation > 0.01 else "dim"))
         if f.get("skies"):
             items.append(("Sky", w.skies_text, "text"))
-        if f.get("wind"):
+        compass = f.get("wind") and self.cfg.get("compass", "compass") == "compass" and w.heading is not None
+        if f.get("wind") and not compass:
             items.append(("Wind", f"{w.wind_speed * 3.6:.0f} km/h {self._wind_word(w)}", "text"))
         if f.get("humidity"):
             items.append(("Humidity", f"{w.humidity * 100:.0f} %", "text"))
+        if f.get("track_usage"):
+            tu = track_usage_text(getattr(snap, "track_usage", ""))
+            if tu:
+                items.append(("Track usage", tu, "text"))
         if f.get("fog"):
             items.append(("Fog", f"{w.fog * 100:.0f} %", "text"))
         if f.get("time"):
             items.append(("Time", _clock(w.time_of_day), "text"))
         self._items = items
+        self._compass = (round(w.wind_speed * 3.6), round(math.degrees(w.wind_dir) / 5) * 5,
+                         round(math.degrees(w.heading) / 5) * 5, self._wind_word(w)) if compass else None
         wind = round(math.degrees(w.wind_rel) / 10) if w.wind_rel is not None else None
-        return (tuple(items), w.wetness, w.declared_wet, w.trend, wind, self.cfg.get("mode"), self.width())
+        return (tuple(items), w.wetness, w.declared_wet, w.trend, wind, self._compass, self.cfg.get("mode"),
+                self.width())
 
     @staticmethod
     def _wind_word(w) -> str:
@@ -132,7 +166,11 @@ class WeatherWidget(OverlayWidget):
         head = self.fonts.em_small * 1.9
         bar = lh * 2.1
         n = 0 if compact else len(self._items)
-        return int(head + bar + lh * n + 10)
+        comp = self._compass_size() + lh * 0.3 if (not compact and getattr(self, "_compass", None)) else 0
+        return int(head + bar + lh * n + comp + 10)
+
+    def _compass_size(self) -> float:
+        return min(self.width() * 0.46, self.fonts.em_base * 6.2)
 
     def paint_content(self, p: QPainter):
         w = self._w
@@ -189,6 +227,65 @@ class WeatherWidget(OverlayWidget):
                 p.setPen(getattr(pal, color))
             self.draw_text(p, QRectF(r.width() * 0.35, y, r.width() * 0.65 - right_pad, lh), value, "base", "r")
             y += lh
+        if getattr(self, "_compass", None):
+            self._paint_compass(p, y + lh * 0.15, r)
+
+    def _paint_compass(self, p: QPainter, y: float, r: QRectF):
+        """Klasikinis kompasas (šiaurė viršuje): mėlyna rodyklė - kur pučia vėjas, auksinis trikampis - kur
+        važiuoji. Dešinėje - greitis, iš kur pučia ir ar tai priešinis / šoninis / pavėjinis."""
+        kmh, wdir, head, word = self._compass
+        pal = self.pal
+        size = self._compass_size()
+        c = QPointF(10 + size / 2, y + size / 2)
+        rad = size / 2 - 2
+        p.setPen(QPen(pal.track, max(1.5, rad * 0.05)))
+        p.setBrush(pal.header)
+        p.drawEllipse(c, rad, rad)
+        for k in range(36):  # padalos kas 10°, ilgesnės kas 90°
+            a = math.radians(k * 10)
+            ln = rad * (0.16 if k % 9 == 0 else 0.08)
+            p.setPen(QPen(pal.text if k % 9 == 0 else pal.dim, 1.4 if k % 9 == 0 else 1.0))
+            p.drawLine(QPointF(c.x() + math.sin(a) * (rad - ln), c.y() - math.cos(a) * (rad - ln)),
+                       QPointF(c.x() + math.sin(a) * rad, c.y() - math.cos(a) * rad))
+        for txt, ang in (("N", 0), ("E", 90), ("S", 180), ("W", 270)):
+            a = math.radians(ang)
+            pt = QPointF(c.x() + math.sin(a) * rad * 0.66, c.y() - math.cos(a) * rad * 0.66)
+            p.setPen(pal.bad if txt == "N" else pal.dim)
+            self.draw_text(p, QRectF(pt.x() - rad * 0.3, pt.y() - rad * 0.2, rad * 0.6, rad * 0.4), txt, "small", "c")
+        # vėjo rodyklė: pučia IŠ wdir, todėl rodo į wdir + 180°
+        a = math.radians(wdir + 180)
+        dx, dy = math.sin(a), -math.cos(a)
+        tip = QPointF(c.x() + dx * rad * 0.62, c.y() + dy * rad * 0.62)
+        tail = QPointF(c.x() - dx * rad * 0.62, c.y() - dy * rad * 0.62)
+        p.setPen(QPen(pal.blue, max(2.0, rad * 0.09), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        p.drawLine(tail, QPointF(tip.x() - dx * rad * 0.2, tip.y() - dy * rad * 0.2))
+        nx, ny = -dy, dx
+        hl, hw = rad * 0.30, rad * 0.20
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(pal.blue)
+        p.drawPolygon(QPolygonF([tip, QPointF(tip.x() - dx * hl + nx * hw, tip.y() - dy * hl + ny * hw),
+                                 QPointF(tip.x() - dx * hl - nx * hw, tip.y() - dy * hl - ny * hw)]))
+        # mašinos kryptis: auksinis trikampis ant krašto
+        a = math.radians(head)
+        dx, dy = math.sin(a), -math.cos(a)
+        nx, ny = -dy, dx
+        t0 = QPointF(c.x() + dx * rad * 0.98, c.y() + dy * rad * 0.98)
+        p.setBrush(pal.accent)
+        p.drawPolygon(QPolygonF([t0, QPointF(t0.x() - dx * rad * 0.24 + nx * rad * 0.13, t0.y() - dy * rad * 0.24 + ny * rad * 0.13),
+                                 QPointF(t0.x() - dx * rad * 0.24 - nx * rad * 0.13, t0.y() - dy * rad * 0.24 - ny * rad * 0.13)]))
+        # tekstas dešinėje
+        x = c.x() + rad + 14
+        w = r.width() - x - 10
+        lh = self.fonts.em_base * 1.45
+        ty = c.y() - lh * 1.5
+        p.setPen(pal.text)
+        self.draw_text(p, QRectF(x, ty, w, lh * 1.2), f"{kmh} km/h", "mid")
+        p.setPen(pal.dim)
+        self.draw_text(p, QRectF(x, ty + lh * 1.2, w, lh), f"from {cardinal(math.radians(wdir))}", "small")
+        col = {"headwind": pal.bad, "tailwind": pal.good}.get(word, pal.yellow)
+        p.setPen(col)
+        self.draw_text(p, QRectF(x, ty + lh * 2.1, w, lh), word.capitalize(), "base")
+        p.setPen(pal.accent)
 
     def _arrow(self, p: QPainter, c: QPointF, rad: float, angle: float):
         """Rodyklė rodo, į kurią pusę pučia vėjas mašinos atžvilgiu (viršus = į priekį)."""

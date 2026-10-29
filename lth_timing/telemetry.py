@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-CHANNELS = ("time", "speed", "throttle", "brake", "clutch", "steer", "gear", "rpm")
+CHANNELS = ("time", "speed", "throttle", "brake", "clutch", "steer", "gear", "rpm", "abs")
 FORMAT = 1
 MAX_LAPS = 80
 
@@ -56,6 +56,7 @@ class LapRecorder:
 
     def __init__(self):
         self.enabled = True
+        self.session = ("", -1)  # (tipas, SessionNum) - nustato variklis
         self.laps: list[Lap] = []
         self.version = 0  # didėja, kai pridedamas ratas (UI žino, ar perpiešti)
         self.track_m = 4000.0
@@ -134,7 +135,7 @@ class LapRecorder:
     def _chan(v) -> tuple:
         return (_num(v.get("Speed")), _num(v.get("Throttle")), _num(v.get("Brake")),
                 1.0 - _num(v.get("Clutch"), 1.0), _num(v.get("SteeringWheelAngle")), _num(v.get("Gear")),
-                _num(v.get("RPM")))
+                _num(v.get("RPM")), 1.0 if v.get("BrakeABSactive") else 0.0)
 
     def _finish(self, tc, v):
         buf = self._buf
@@ -153,11 +154,14 @@ class LapRecorder:
         for i, ch in enumerate(CHANNELS[1:]):
             data[ch] = np.interp(grid, ps_m, sel[:, 2 + i]).astype(np.float32)
         data["gear"] = np.round(data["gear"])
+        # ABS: bet koks veikimas tarp tinklelio taškų paliekamas matomas (ne „išvidurkinamas“)
+        data["abs"] = (data["abs"] > 0.01).astype(np.float32)
         pl = int(_num(v.get("PlayerCarIdx"), -1))
         cpos = v.get("CarIdxClassPosition")
         pos = int(cpos[pl]) if cpos is not None and 0 <= pl < len(cpos) else 0
         fuel1 = _num(v.get("FuelLevel"))
         meta = dict(self.meta, date=time.strftime("%Y-%m-%d %H:%M"), position=pos,
+                    session_type=self.session[0], session_num=self.session[1],
                     fuel_used=(self._fuel0 - fuel1) if self._fuel0 is not None and math.isfinite(fuel1)
                     and self._fuel0 > fuel1 else None)
         lap_no = int(_num(v.get("LapCompleted"), 0))

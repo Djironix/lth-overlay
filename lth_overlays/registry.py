@@ -82,7 +82,8 @@ WEATHER_FIELDS = {
     "precip": ("Rain", True),
     "skies": ("Sky", True),
     "wind": ("Wind", True),
-    "humidity": ("Humidity", False),
+    "humidity": ("Humidity", True),
+    "track_usage": ("Track usage (rubber at session start)", True),
     "fog": ("Fog", False),
     "time": ("Time of day", True),
     "trend": ("Trend", True),
@@ -435,6 +436,8 @@ WIDGETS: list[WidgetSpec] = [
           Field("rain_calls", "Rain calls above the widget", "bool", True,
                 help="Short calls like WET TYRES or HIDDEN WATER when conditions change"),
           Field("fields", "Fields", "checks", None, spec=WEATHER_FIELDS),
+          Field("compass", "Wind compass", "choice", "compass",
+                options={"compass": "Compass (north up)", "arrow": "Small arrow"}),
       ]),
     W("rain_master", "Rain Master", "Track", "Rain tips while you drive: the current call with a short "
       "explanation, and the full list for these conditions when you stop. Tips by Regis / LTH Racing.",

@@ -5,8 +5,9 @@ import math
 
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt
-from PySide6.QtGui import QColor, QPainter, QPainterPath, QPen, QPolygonF
+from PySide6.QtGui import QColor, QFontMetricsF, QPainter, QPainterPath, QPen, QPolygonF
 
+from .wheel import GT3Wheel, decimate, runs
 from .panel import PanelWidget
 
 L_TO_GAL = 0.264172
@@ -268,6 +269,8 @@ class InputsWidget(PanelWidget):
 
     def __init__(self, ctx):
         self._seq = -1
+        self._wheel = None
+        self._fcache = {}
         super().__init__(ctx)
 
     def content_key(self, snap):
@@ -280,7 +283,7 @@ class InputsWidget(PanelWidget):
         n = int(float(self.cfg.get("seconds", 4.0)) * 60)
         tr = {k: v[-n:] for k, v in (p.inputs or {}).items()}
         self._view = (tr, round(p.throttle, 2), round(p.brake, 2), round(p.clutch, 2), p.abs_active,
-                      p.speed, p.gear, p.steer)
+                      p.speed, p.gear, p.steer, int(p.t * 60))
         return (len(tr.get("throttle", ())), p.t, self.width(), self.height())
 
     def fast_tick(self, timing) -> bool:
@@ -301,36 +304,57 @@ class InputsWidget(PanelWidget):
         self._last_arr = (arr.copy(), (speed, gear))
         tr = dict(zip(self.KEYS, arr))
         self._view = (tr, float(arr[0, -1]), float(arr[1, -1]), float(arr[2, -1]), bool(arr[4, -1] > 0.5),
-                      speed, gear, float(arr[3, -1]))
+                      speed, gear, float(arr[3, -1]), int(pl.inp_seq))
         return True
 
     def desired_height(self) -> int:
         return int(self.fonts.em_base * 6)
 
-    def paint_content(self, p: QPainter):
-        if self._view is None:
-            return
-        tr, thr, brk, clu, abs_on, speed, gear, steer = self._view
-        r = QRectF(self.rect())
-        pal = self.pal
-        pad = self.pad()
+    def _font(self, px: float):
+        px = max(6, int(round(px)))
+        f = self._fcache.get(px)
+        if f is None:
+            from PySide6.QtGui import QFont
+            f = self._fcache[px] = self.fonts._font(px, QFont.Weight.Bold)
+        return f
+
+    def _layout(self, r: QRectF):
+        """Visų dalių vietos pagal valdiklio dydį (veikia bet kokiam monitoriui / masteliui)."""
         c = self.cfg
+        pad = self.pad()
         bars = c.get("show_bars", True)
         pct = bars and c.get("show_percent", True)
         wheel = c.get("show_wheel", True)
-        bw = r.height() * 0.13 if bars else 0
+        speed = wheel and c.get("show_speed", True)
+        show_abs = bool(c.get("show_abs", False))
+        nbars = 3 if c.get("show_clutch") else 2
+        inner_h = r.height() - 2 * pad
+        bw = inner_h * 0.13 if bars else 0
         if pct:
             bw = max(bw, self.text_width("100", "tiny") + 2)
-        nbars = 3 if c.get("show_clutch") else 2
-        wsz = (r.height() - 2 * pad) if wheel else 0
-        show_abs = bool(c.get("show_abs", False))
-        asz = max(self.text_width("ABS", "tiny") + 8, (r.height() - 2 * pad) * 0.42) if show_abs else 0
-        right = (bw * nbars + pad * nbars if bars else 0) + (wsz + pad if wheel else 0) + (asz + pad if show_abs else 0)
-        lab_h = self.lh() * 0.75 if pct else 0
-        graph = QRectF(pad, pad, max(10.0, r.width() - 2 * pad - right), r.height() - 2 * pad)
-        bar_top = graph.top() + lab_h
+        asz = max(self.text_width("ABS", "tiny") + 8, inner_h * 0.42) if show_abs else 0
+        wsz = inner_h * (0.60 if speed else 1.0) if wheel else 0  # 60 % vairas, 40 % greitis po juo
+        sp_px = inner_h * 0.40 * 0.86
+        sp_w = QFontMetricsF(self._font(sp_px)).horizontalAdvance("888") + 4 if speed else 0
+        col_w = max(wsz, sp_w) if wheel else 0
+        right = (bw * nbars + pad * nbars if bars else 0) + (asz + pad if show_abs else 0) + (col_w + pad if wheel else 0)
+        graph = QRectF(pad, pad, max(10.0, r.width() - 2 * pad - right), inner_h)
+        return dict(pad=pad, bars=bars, pct=pct, wheel=wheel, speed=speed, show_abs=show_abs, nbars=nbars, bw=bw,
+                    asz=asz, wsz=wsz, sp_px=sp_px, col_w=col_w, graph=graph,
+                    lab_h=self.lh() * 0.75 if pct else 0)
+
+    def paint_content(self, p: QPainter):
+        if self._view is None:
+            return
+        tr, thr, brk, clu, abs_on, speed, gear, steer, seq = self._view
+        r = QRectF(self.rect())
+        pal = self.pal
+        L = self._layout(r)
+        pad, graph, bw, nbars = L["pad"], L["graph"], L["bw"], L["nbars"]
+        bar_top = graph.top() + L["lab_h"]
         # fonas, tinklelis ir juostų pagrindai nesikeičia - paruošiami vieną kartą
-        bkey = (self.width(), self.height(), bars, nbars, pct, wheel, show_abs, id(pal), self.devicePixelRatioF())
+        bkey = (self.width(), self.height(), L["bars"], nbars, L["pct"], L["wheel"], L["speed"], L["show_abs"],
+                id(pal), self.devicePixelRatioF())
         if getattr(self, "_bg_key", None) != bkey:
             from PySide6.QtGui import QPixmap
             dpr = self.devicePixelRatioF()
@@ -346,46 +370,37 @@ class InputsWidget(PanelWidget):
             for k in (0.25, 0.5, 0.75):
                 yy = graph.bottom() - graph.height() * k
                 q.drawLine(QPointF(graph.left(), yy), QPointF(graph.right(), yy))
-            if bars:
+            if L["bars"]:
                 x = graph.right() + pad
                 q.setPen(Qt.PenStyle.NoPen)
                 q.setBrush(pal.track)
                 for _ in range(nbars):
                     q.drawRoundedRect(QRectF(x, bar_top, bw, graph.bottom() - bar_top), 2, 2)
                     x += bw + pad
-            if wheel:  # vairo lankas nesisuka - piešiamas vieną kartą
-                wr = QRectF(r.width() - pad - wsz, pad, wsz, wsz)
-                rad = wr.width() / 2 - 2
-                ring = max(3.0, rad * 0.16)
-                rim = QColor(pal.text)
-                rim.setAlpha(70)
-                q.setPen(QPen(rim, ring))
-                q.setBrush(Qt.BrushStyle.NoBrush)
-                q.drawEllipse(wr.center(), rad - ring / 2, rad - ring / 2)
             q.end()
             self._bg_pm, self._bg_key = pm, bkey
         p.drawPixmap(0, 0, self._bg_pm)
         self._drew_bg = True
 
         pen_w = max(1.5, self._scale() * 1.8)
+        buckets = max(8, int(graph.width() / 2))  # grupė ~2 px, min + max = ~1 taškas pikseliui
 
-        def trace(vals, color, center=False, scale=1.0, aa=True):
+        def to_poly(idx, v, n, center, scale):
+            v = np.clip(v * scale, -1, 1) if center else np.clip(v, 0, 1)
+            xs = graph.left() + idx * (graph.width() / max(1, n - 1))
+            ys = graph.center().y() - v * graph.height() / 2 if center else graph.bottom() - v * graph.height()
+            return QPolygonF(list(map(QPointF, xs.tolist(), ys.tolist())))
+
+        def trace(vals, color, center=False, scale=1.0, aa=True, width=None):
             if vals is None or len(vals) < 2:
                 return
-            n = len(vals)
-            # taškas kas ~4 px: pigu piešti net 60 kartų per sekundę, akimi skirtumo nėra
-            m = int(min(n, max(2, graph.width() / 4.0)))
-            idx = np.linspace(0, n - 1, m).astype(np.int32)
-            v = vals[idx]
-            v = np.clip(v * scale, -1, 1) if center else np.clip(v, 0, 1)
-            xs = graph.left() + np.arange(m) * (graph.width() / max(1, m - 1))
-            ys = graph.center().y() - v * graph.height() / 2 if center else graph.bottom() - v * graph.height()
-            poly = QPolygonF(list(map(QPointF, xs.tolist(), ys.tolist())))
-            p.setPen(QPen(color, pen_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap, Qt.PenJoinStyle.BevelJoin))
+            idx, v = decimate(np.asarray(vals), seq, buckets)
+            p.setPen(QPen(color, width or pen_w, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap,
+                          Qt.PenJoinStyle.BevelJoin))
             p.setBrush(Qt.BrushStyle.NoBrush)
             if not aa:
                 p.setRenderHint(QPainter.RenderHint.Antialiasing, False)
-            p.drawPolyline(poly)
+            p.drawPolyline(to_poly(idx, v, len(vals), center, scale))
             if not aa:
                 p.setRenderHint(QPainter.RenderHint.Antialiasing, True)
 
@@ -393,9 +408,20 @@ class InputsWidget(PanelWidget):
             trace(tr.get("steer"), QColor(200, 200, 210, 150), center=True, scale=1 / 2.5, aa=False)
         if self.cfg.get("show_clutch"):
             trace(tr.get("clutch"), pal.blue)
-        trace(tr.get("brake"), pal.yellow if abs_on else pal.bad)
+        brake = tr.get("brake")
+        trace(brake, pal.bad)
+        absv = tr.get("abs")
+        if brake is not None and absv is not None and len(absv) == len(brake):
+            # ABS: ta stabdžio kreivės dalis, kur ABS veikė, lieka geltona ir slenka kartu su ja
+            n = len(brake)
+            col = QColor(pal.yellow)
+            p.setPen(QPen(col, pen_w * 1.6, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
+            for a, b in runs(np.asarray(absv) > 0.5):
+                lo, hi = max(0, a - 1), min(n - 1, b + 1)
+                idx = np.arange(lo, hi + 1)
+                p.drawPolyline(to_poly(idx, np.asarray(brake)[idx], n, False, 1.0))
         trace(tr.get("throttle"), pal.good)
-        if bars:
+        if L["bars"]:
             x = graph.right() + pad
             vals = [(thr, pal.good), (brk, pal.yellow if abs_on else pal.bad)]
             if nbars == 3:
@@ -406,56 +432,42 @@ class InputsWidget(PanelWidget):
                 h = bh * max(0.0, min(1.0, v))
                 if h > 0.5:
                     p.fillRect(QRectF(x, graph.bottom() - h, bw, h), col)
-                if pct:
+                if L["pct"]:
                     p.setPen(col)
-                    self.draw_text(p, QRectF(x - 4, graph.top(), bw + 8, lab_h), f"{v * 100:.0f}", "tiny", "c")
+                    self.draw_text(p, QRectF(x - 4, graph.top(), bw + 8, L["lab_h"]), f"{v * 100:.0f}", "tiny", "c")
                     p.setPen(Qt.PenStyle.NoPen)
                 x += bw + pad
-        if show_abs:  # ABS lemputė: dega, kol ABS mažina stabdymo jėgą (BrakeABSactive)
-            ax = graph.right() + pad + ((bw + pad) * nbars if bars else 0)
-            ar = QRectF(ax, graph.center().y() - asz / 2, asz, asz)
+        x = graph.right() + pad + ((bw + pad) * nbars if L["bars"] else 0)
+        if L["show_abs"]:  # ABS lemputė: dega, kol ABS mažina stabdymo jėgą (BrakeABSactive)
+            asz = L["asz"]
+            ar = QRectF(x, graph.center().y() - asz / 2, asz, asz)
             p.setPen(Qt.PenStyle.NoPen)
             p.setBrush(pal.yellow if abs_on else pal.track)
             p.drawRoundedRect(ar, 3, 3)
             p.setPen(QColor(20, 20, 20) if abs_on else pal.dim)
             self.draw_text(p, ar, "ABS", "tiny", "c")
-        if wheel:
-            self._paint_wheel(p, QRectF(r.width() - pad - wsz, pad, wsz, wsz), steer, gear, speed)
+            x += asz + pad
+        if L["wheel"]:
+            self._paint_wheel(p, QRectF(x, graph.top(), L["col_w"], graph.height()), L, steer, gear, speed)
 
-    def _paint_wheel(self, p: QPainter, rect: QRectF, steer: float, gear: int, speed: float):
-        """Vairas: sukasi kartu su tavo vairu (SteeringWheelAngle, rad), centre - pavara ir greitis."""
-        import math
-        pal = self.pal
-        c = rect.center()
-        rad = rect.width() / 2 - 2
-        ring = max(3.0, rad * 0.16)
-        p.setBrush(Qt.BrushStyle.NoBrush)
-        # lankas - fono paveikslėlyje; čia tik besisukanti viršaus žymė (12 valanda) pasukta pagal vairą; iRacing: teigiamas = į kairę
-        a = -steer
-        p.setPen(QPen(pal.accent, ring + 0.5, Qt.PenStyle.SolidLine, Qt.PenCapStyle.FlatCap))
-        span = 26  # laipsniais
-        start = 90 - math.degrees(a) - span / 2
-        p.drawArc(QRectF(c.x() - rad + ring / 2, c.y() - rad + ring / 2, 2 * rad - ring, 2 * rad - ring),
-                  int(start * 16), int(span * 16))
-        # stipinai
-        sp = QColor(pal.text)
-        sp.setAlpha(55)
-        p.setPen(QPen(sp, max(1.5, ring * 0.45)))
-        for base in (180, 0, 270):
-            ang = math.radians(base) + a
-            x1, y1 = c.x() + math.cos(ang) * rad * 0.42, c.y() - math.sin(ang) * rad * 0.42
-            x2, y2 = c.x() + math.cos(ang) * (rad - ring), c.y() - math.sin(ang) * (rad - ring)
-            p.drawLine(QPointF(x1, y1), QPointF(x2, y2))
+    def _paint_wheel(self, p: QPainter, col: QRectF, L: dict, steer: float, gear: int, speed: float):
+        """GT3 D formos vairas (sukasi kartu su tavo vairu), pavara centre, greitis po vairu."""
+        if self._wheel is None:
+            self._wheel = GT3Wheel()
+        wsz = L["wsz"]
+        c = QPointF(col.center().x(), col.top() + wsz / 2)
+        self._wheel.draw(p, c, wsz, steer, self.devicePixelRatioF())
         g = "R" if gear < 0 else "N" if gear == 0 else str(gear)
-        mph = self.cfg.get("unit", "kmh") == "mph"
-        spd = f"{speed * (2.23694 if mph else 3.6):.0f}"
-        p.setPen(pal.text)
-        if self.cfg.get("show_speed", True):
-            self.draw_text(p, QRectF(c.x() - rad, c.y() - rad * 0.62, 2 * rad, rad * 0.9), g, "big", "c")
-            p.setPen(pal.dim)
-            self.draw_text(p, QRectF(c.x() - rad, c.y() + rad * 0.12, 2 * rad, rad * 0.5), spd, "small", "c")
-        else:
-            self.draw_text(p, QRectF(c.x() - rad, c.y() - rad * 0.5, 2 * rad, rad), g, "big", "c")
+        p.setPen(self.pal.text)
+        p.setFont(self._font(wsz * 0.30))
+        p.drawText(QRectF(c.x() - wsz / 2, c.y() - wsz * 0.24, wsz, wsz * 0.36), Qt.AlignmentFlag.AlignCenter, g)
+        if L["speed"]:
+            mph = self.cfg.get("unit", "kmh") == "mph"
+            spd = f"{speed * (2.23694 if mph else 3.6):.0f}"
+            p.setFont(self._font(L["sp_px"]))
+            p.setPen(self.pal.text)
+            p.drawText(QRectF(col.left() - 4, col.top() + wsz, col.width() + 8, col.height() - wsz),
+                       Qt.AlignmentFlag.AlignCenter, spd)
 
 
 class GForceWidget(PanelWidget):

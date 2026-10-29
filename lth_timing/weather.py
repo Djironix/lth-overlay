@@ -29,6 +29,7 @@ class WeatherState:
     wind_speed: float = 0.0  # m/s
     wind_dir: float = 0.0  # rad (iš kur pučia, nuo šiaurės)
     wind_rel: float | None = None  # rad, santykinai su mašinos kryptimi; 0 = priešinis
+    heading: float | None = None  # mašinos kryptis (YawNorth), rad nuo šiaurės
     humidity: float = 0.0
     fog: float = 0.0
     time_of_day: float = 0.0  # s nuo vidurnakčio
@@ -69,6 +70,7 @@ class WeatherTracker:
         w.wind_dir = _f(f.get("WindDir", 0.0), 0.0)
         yaw = f.YawNorth
         w.wind_rel = None if yaw is None else _wrap(w.wind_dir - float(yaw))
+        w.heading = None if yaw is None else float(yaw)
         w.humidity = _f(f.get("RelativeHumidity", 0.0), 0.0)
         w.fog = _f(f.get("FogLevel", 0.0), 0.0)
         w.time_of_day = _f(f.get("SessionTimeOfDay", 0.0), 0.0)
