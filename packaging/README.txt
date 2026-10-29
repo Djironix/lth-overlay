@@ -1,4 +1,4 @@
-LTH Overlays 0.6.2
+LTH Overlays 0.6.3
 ==================
 
 In-house iRacing overlays for the LTH community. 35 widgets, all set up from one Control
@@ -7,6 +7,18 @@ Sectors, Session, Race engineer, Flags, Radar, Overtake alert, Rejoin indicator,
 Pit helper, Pit commands, Pit window, Incidents, Stint, Formation, Radio, Fuel, Dash,
 Inputs, G-force, Tyres, Car setting changes, Engine warnings, Track map, Flat track map,
 Weather, Rain Master, Garage cover, Stream chat, Connection and Performance.
+
+New in 0.6.3
+------------
+- New Control Center look: navigation moved to the top bar (Overview, Widgets, Layout,
+  Telemetry, Records, Setups, Drivers, Stream), the rest is under the gear button
+  (Profiles, Appearance, Hotkeys, General, Performance, Diagnostics, About, Quit).
+- Profile chip with your iRacing name: switch profiles or turn auto switching on/off.
+- Bell button with the latest notifications (turns gold when something new happens).
+- Bottom bar: iRacing status, CPU / RAM, Edit layout with its hotkey, and an
+  "Overlays on" switch that hides or shows all widgets at once.
+- Overview: welcome with your name, latest session with session type, cleaner stats.
+- The top bar fits windows down to 1080 px wide without cutting any text.
 
 New in 0.6.2
 ------------

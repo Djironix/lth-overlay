@@ -13,13 +13,13 @@ from PySide6.QtGui import QColor, QFont, QFontDatabase, QIcon, QPainter, QPixmap
 UI_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "data", "ui")
 
 T = {
-    "bg": "#0B0B0E",
-    "sidebar": "#0F0F13",
-    "surface": "#15151A",
-    "surface2": "#1B1B22",
-    "surface3": "#23232C",
-    "border": "#24242D",
-    "border2": "#30303B",
+    "bg": "#08090B",
+    "sidebar": "#0E0F12",
+    "surface": "#111215",
+    "surface2": "#17181C",
+    "surface3": "#202127",
+    "border": "#1D1F24",
+    "border2": "#2A2C33",
     "text": "#EDEDF1",
     "muted": "#A3A3B1",
     "faint": "#828290",  # ≥ 4.5:1 ant kortelių fono - skaitoma
@@ -76,10 +76,29 @@ QLabel[role="eyebrow"] {{ color: {T['faint']}; font-size: 11px; font-weight: 600
 QLabel[role="kpi"] {{ font-size: 26px; font-weight: 600; letter-spacing: -0.5px; }}
 QLabel[role="mono"] {{ font-family: "Cascadia Mono", "Consolas", monospace; font-size: 12px; color: {T['muted']}; }}
 
-QFrame#Card {{ background: {T['surface']}; border: 1px solid {T['border']}; border-radius: 12px; }}
+QFrame#Card {{ background: {T['surface']}; border: 1px solid {T['border']}; border-radius: 20px; }}
 QFrame#CardHover:hover {{ border-color: {T['border2']}; }}
 QFrame#Sidebar {{ background: {T['sidebar']}; border-right: 1px solid {T['border']}; }}
-QFrame#TopBar {{ background: {T['bg']}; border-bottom: 1px solid {T['border']}; }}
+QFrame#TopBar {{ background: {T['surface']}; border: 1px solid {T['border']}; border-radius: 22px; }}
+QFrame#StatusBar {{ background: {T['surface']}; border: 1px solid {T['border']}; border-radius: 18px; }}
+QPushButton#NavPill {{ background: transparent; border: none; border-radius: 12px; padding: 9px 16px;
+                       color: {T['muted']}; font-size: 14px; font-weight: 500; }}
+QPushButton#NavPill:hover {{ color: {T['text']}; background: transparent; }}
+QPushButton#NavPill:checked {{ background: {T['accent']}; color: {T['accent_text']}; font-weight: 700; border: none; }}
+QPushButton#IconBtn {{ background: {T['surface2']}; border: 1px solid {T['border2']}; border-radius: 12px; padding: 0; }}
+QPushButton#IconBtn:hover {{ background: {T['surface3']}; }}
+QPushButton#IconBtn::menu-indicator {{ image: none; width: 0; }}
+QPushButton#ProfileChip {{ background: {T['surface2']}; border: 1px solid {T['border2']}; border-radius: 14px;
+                           padding: 5px 14px 5px 6px; text-align: left; }}
+QPushButton#ProfileChip::menu-indicator {{ image: none; width: 0; }}
+QPushButton#ProfileChip:hover {{ background: {T['surface3']}; }}
+QPushButton#EditKeys {{ background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 0; }}
+QPushButton#EditKeys:hover {{ background: {T['surface2']}; }}
+QPushButton#EditKeys:checked {{ background: {T['accent_soft']}; border-color: {T['accent']}; }}
+QLabel#PageTitle {{ color: {T['text']}; font-size: 28px; font-weight: 800; background: transparent; }}
+QLabel#EditKeysText {{ color: {T['muted']}; font-size: 13px; background: transparent; padding-right: 4px; }}
+QLabel#Keycap {{ color: {T['text']}; font-size: 11px; font-weight: 600; background: {T['surface2']};
+                 border: 1px solid {T['border2']}; border-radius: 5px; padding: 1px 6px; }}
 QFrame#Divider {{ background: {T['border']}; max-height: 1px; min-height: 1px; border: none; }}
 
 QScrollArea {{ background: transparent; border: none; }}
@@ -91,12 +110,13 @@ QScrollBar:horizontal {{ background: transparent; height: 10px; margin: 2px; }}
 QScrollBar::handle:horizontal {{ background: {T['surface3']}; border-radius: 3px; min-width: 30px; }}
 QScrollBar::add-line, QScrollBar::sub-line, QScrollBar::add-page, QScrollBar::sub-page {{ background: none; border: none; width: 0; height: 0; }}
 
-QPushButton {{ background: {T['surface2']}; border: 1px solid {T['border2']}; border-radius: 8px;
-               padding: 7px 14px; font-weight: 500; }}
+QPushButton {{ background: {T['surface2']}; border: 1px solid {T['border2']}; border-radius: 12px;
+               padding: 8px 15px; font-weight: 500; }}
 QPushButton:hover {{ background: {T['surface3']}; }}
 QPushButton:pressed {{ background: {T['border']}; }}
 QPushButton:disabled {{ color: {T['faint']}; }}
-QPushButton[variant="primary"] {{ background: {T['accent']}; color: {T['accent_text']}; border: 1px solid {T['accent']}; }}
+QPushButton[variant="primary"] {{ background: {T['accent']}; color: {T['accent_text']}; border: 1px solid {T['accent']};
+                                  font-weight: 700; }}
 QPushButton[variant="primary"]:hover {{ background: {T['accent_hover']}; }}
 QPushButton[variant="ghost"] {{ background: transparent; border: 1px solid transparent; color: {T['muted']}; }}
 QPushButton[variant="ghost"]:hover {{ background: {T['surface2']}; color: {T['text']}; }}
@@ -105,7 +125,7 @@ QPushButton[variant="danger"]:hover {{ background: rgba(242,85,90,0.10); border-
 QPushButton:checked {{ background: {T['accent_soft']}; border-color: {T['accent']}; color: {T['accent']}; }}
 
 QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox, QPlainTextEdit, QKeySequenceEdit {{
-    background: {T['bg']}; border: 1px solid {T['border2']}; border-radius: 8px; padding: 6px 9px;
+    background: {T['bg']}; border: 1px solid {T['border2']}; border-radius: 10px; padding: 6px 9px;
     selection-background-color: {T['accent']}; selection-color: {T['accent_text']}; }}
 QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus, QPlainTextEdit:focus {{ border-color: {T['accent']}; }}
 QLineEdit:hover, QSpinBox:hover, QDoubleSpinBox:hover, QComboBox:hover {{ border-color: {T['faint']}; }}
@@ -205,6 +225,7 @@ _ICONS = {
     "map": _P.format("M9 4 3 6.5v13.5l6-2.5 6 2.5 6-2.5V4l-6 2.5zM9 4v13.5M15 6.5V20"),
     "cloud": _P.format("M7 18.5a4.5 4.5 0 0 1-.6-9A6 6 0 0 1 18 8.5a4.5 4.5 0 0 1-.5 10z"),
     "chat": _P.format("M4 5h16v11H9l-5 4zM8 9.5h8M8 12.5h5"),
+    "bell": _P.format("M6 16.5V11a6 6 0 0 1 12 0v5.5l1.5 1.5h-15zM10 20.5h4"),
     "broadcast": _P.format("M12 12h.01M8.5 15.5a5 5 0 0 1 0-7M15.5 8.5a5 5 0 0 1 0 7M5.6 18.4a9 9 0 0 1 0-12.8M18.4 5.6a9 9 0 0 1 0 12.8"),
     "wifi": _P.format("M2.5 9a14 14 0 0 1 19 0M5.5 12.5a9.5 9.5 0 0 1 13 0M8.5 16a5 5 0 0 1 7 0M12 19.5h.01"),
     "cpu": '<rect x="6" y="6" width="12" height="12" rx="2"/><rect x="9.5" y="9.5" width="5" height="5" rx="1"/>'

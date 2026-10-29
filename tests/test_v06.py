@@ -446,3 +446,40 @@ def test_new_control_center_pages(oapp, qapp, engine):
         assert not cc.grab().isNull()
     oapp.notify("test toast")
     cc.hide()
+
+
+def test_top_navigation_shell(oapp, qapp):
+    """GoFast stiliaus apvalkalas: piliulės, nustatymų meniu, Overlays jungiklis, glaudinimas siauram langui."""
+    from lth_overlays.control.center import NAV_MAIN, NAV_MORE
+    oapp.config.data["onboarding_done"] = True
+    oapp.open_control_center()
+    cc = oapp.control
+    assert set(cc._nav) == {k for k, _ in NAV_MAIN}
+    acts = [a.text() for a in cc.b_settings.menu().actions() if a.text()]
+    assert len(acts) == len(NAV_MORE) + 1 and acts[-1].startswith("Quit")
+    cc.go("general")
+    qapp.processEvents()
+    assert not any(b.isChecked() for b in cc._nav.values())
+    cc.go("telemetry")
+    assert cc._nav["telemetry"].isChecked()
+    # Overlays on jungiklis = Hide all
+    was = oapp.hidden_all
+    cc.t_overlays.click()
+    assert oapp.hidden_all != was
+    cc.t_overlays.click()
+    assert oapp.hidden_all == was
+    # siauriausias langas - juosta telpa
+    cc.resize(1080, 760)
+    qapp.processEvents()
+    cc._fit_topnav()
+    assert cc._topbar_w.layout().sizeHint().width() <= cc.width() - 44
+    cc.resize(1700, 900)
+    cc._fit_topnav()
+    assert cc._compact == 0
+    # pranešimų varpelis
+    oapp.notify("hello")
+    cc.tick(oapp.engine.latest)
+    assert cc._notes_hot
+    cc._fill_notes()
+    assert not cc._notes_hot and any("hello" in a.text() for a in cc.notes_menu.actions())
+    cc.hide()

@@ -8,7 +8,7 @@ import os
 import numpy as np
 from PySide6.QtCore import QPointF, QRectF, Qt, QTimer
 from PySide6.QtGui import QColor, QFont, QLinearGradient, QPainter, QPainterPath, QPen, QPolygonF
-from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QVBoxLayout, QWidget
+from PySide6.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from lth_timing import telemetry as T
 
@@ -92,8 +92,9 @@ class Donut(QWidget):
         self.frac = 0.0
         self.setMinimumSize(160, 160)
 
-    def set(self, frac):
+    def set(self, frac, empty=False):
         self.frac = max(0.0, min(1.0, frac))
+        self.empty = empty
         self.update()
 
     def paintEvent(self, e):
@@ -107,10 +108,11 @@ class Donut(QWidget):
         p.drawArc(r, 90 * 16, int(-self.frac * 360 * 16))
         p.setPen(qcolor("text"))
         p.setFont(ui_font(24, QFont.Weight.Bold))
-        p.drawText(r.adjusted(0, -10, 0, -10), Qt.AlignmentFlag.AlignCenter, f"{self.frac * 100:.0f}%")
+        empty = getattr(self, "empty", True)
+        p.drawText(r.adjusted(0, -10, 0, -10), Qt.AlignmentFlag.AlignCenter, "–" if empty else f"{self.frac * 100:.0f}%")
         p.setPen(qcolor("faint"))
         p.setFont(ui_font(11))
-        p.drawText(r.adjusted(0, 30, 0, 30), Qt.AlignmentFlag.AlignCenter, "of laps")
+        p.drawText(r.adjusted(0, 30, 0, 30), Qt.AlignmentFlag.AlignCenter, "no laps yet" if empty else "of laps")
 
 
 class WeekBars(QWidget):
@@ -200,6 +202,7 @@ class OverviewPage(Page):
 
     def __init__(self, center):
         super().__init__(center)
+        self.widget().layout().setContentsMargins(32, 18, 32, 12)  # telpa į 900 px aukščio langą be slinkties
         main = QHBoxLayout()
         main.setSpacing(24)
         # ---- kairė: sveikinimas ir trasa ----
@@ -207,8 +210,10 @@ class OverviewPage(Page):
         left.setSpacing(4)
         self.hello = label("Welcome back,", "muted")
         left.addWidget(self.hello)
-        left.addWidget(label("Ready to race?", "h2"))
-        left.addSpacing(26)
+        rr = label("Ready to race?")
+        rr.setStyleSheet(f"font-size: 24px; font-weight: 700; color: {TH['text']};")
+        left.addWidget(rr)
+        left.addSpacing(18)
         t = label("LTH Overlays")
         t.setStyleSheet(f"font-size: 52px; font-weight: 800; color: {TH['text']};")
         left.addWidget(t)
@@ -225,7 +230,7 @@ class OverviewPage(Page):
         row.addStretch(1)
         left.addLayout(row)
         self.glow = TrackGlow()
-        self.glow.setMinimumHeight(330)
+        self.glow.setMinimumHeight(250)
         left.addWidget(self.glow, 1)
         self.on_screen = label("", "faint", wrap=True)
         left.addWidget(self.on_screen)
@@ -238,10 +243,26 @@ class OverviewPage(Page):
         grid.addWidget(self.t_laps, 0, 0)
         grid.addWidget(self.t_time, 0, 1)
         self.c_last = Card("Latest session")
+        box = QWidget()
+        box.setObjectName("LastBox")
+        box.setAttribute(Qt.WidgetAttribute.WA_StyledBackground, True)
+        box.setStyleSheet(f"QWidget#LastBox {{ background: {TH['surface2']}; border-radius: 12px; }}")
+        bh = QHBoxLayout(box)
+        bh.setContentsMargins(12, 10, 12, 10)
+        bh.setSpacing(10)
+        self.last_badge = QLabel("")
+        self.last_badge.setStyleSheet(f"background: {TH['accent']}; color: {TH['accent_text']}; font-size: 10px;"
+                                      f" font-weight: 800; border-radius: 5px; padding: 2px 6px;")
+        self.last_badge.hide()
+        bh.addWidget(self.last_badge, 0, Qt.AlignmentFlag.AlignVCenter)
+        bc = QVBoxLayout()
+        bc.setSpacing(2)
         self.last_head = label("No sessions yet", "h3", wrap=True)
         self.last_sub = label("Drive some laps - every session is saved.", "faint", wrap=True)
-        self.c_last.add(self.last_head)
-        self.c_last.add(self.last_sub)
+        bc.addWidget(self.last_head)
+        bc.addWidget(self.last_sub)
+        bh.addLayout(bc, 1)
+        self.c_last.add(box)
         self.last_track = TrackGlow(thin=True)
         self.last_track.setFixedHeight(120)
         self.c_last.add(self.last_track)
@@ -249,8 +270,10 @@ class OverviewPage(Page):
         self.last_kv.setVerticalSpacing(6)
         self.c_last.add(self.last_kv)
         grid.addWidget(self.c_last, 1, 0)
-        self.c_car = Card("Most driven car", "Last 50 sessions")
+        self.c_car = Card("Most driven car")
         self.donut = Donut()
+        from PySide6.QtWidgets import QSizePolicy
+        self.donut.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
         self.c_car.add(self.donut)
         self.car_lbl = label("–", "muted", wrap=True)
         self.c_car.add(self.car_lbl)
@@ -266,6 +289,8 @@ class OverviewPage(Page):
         self.content.addLayout(main)
         self.content.addStretch(1)
         self._key = None
+        self._list_t = 0.0
+        self._st = []
 
     def on_show(self):
         self._key = None
@@ -280,9 +305,22 @@ class OverviewPage(Page):
                 lv.setStyleSheet(f"color: {TH[col]};")
             self.last_kv.addWidget(lv, r, 1, Qt.AlignmentFlag.AlignRight)
 
+    def _hello(self):
+        snap = self.ctx.engine.latest
+        me = next((r for r in snap.cars if r.is_me), None) if snap.connected else None
+        name = (me.name if me is not None and me.name else self.ctx.config.data.get("driver_name")) or ""
+        first = name.split()[0] if name.split() else ""
+        self.hello.setText(f"Welcome back, {first}" if first else "Welcome back,")
+
     def tick(self, snap):
         from ..sessions import stats
-        st = self.ctx.sessions.list() if getattr(self.ctx, "sessions", None) else []
+        import time as _t
+        now = _t.monotonic()
+        if self._key is None or now - self._list_t > 5.0:  # disko skaitymas ne dažniau kaip kas 5 s
+            self._list_t = now
+            self._st = self.ctx.sessions.list() if getattr(self.ctx, "sessions", None) else []
+            self._hello()
+        st = self._st
         key = (tuple(f for f, _ in st), tuple(m.get("updated") for _, m in st[:1]))
         on = [s.title for s in WIDGETS if self.ctx.config.widget(s.name).get("visible")]
         self.on_screen.setText("On screen: " + (", ".join(on) if on else "nothing - open Widgets to add some"))
@@ -304,7 +342,9 @@ class OverviewPage(Page):
         last = s["latest"]
         if last:
             kind = SESSION_NAMES.get(last.get("type") or "", "Session")
-            self.last_head.setText(f"{kind}  ·  {last.get('car_name') or last.get('car') or ''}")
+            self.last_badge.setText(kind.upper())
+            self.last_badge.show()
+            self.last_head.setText(last.get("car_name") or last.get("car") or "")
             self.last_sub.setText(f"{last.get('track') or ''}  ·  {(last.get('started') or '')[:16]}")
             pts = _track_points(last.get("track_key"))
             self.last_track.set_points(pts)
@@ -315,7 +355,10 @@ class OverviewPage(Page):
                 rows.append(("Position", f"P{last['position']}", None))
             self._kv(rows)
         top = s["top_car"]
-        if top:
+        if top and top[1]:
             self.donut.set(top[2])
             self.car_lbl.setText(f"{top[0]}  ·  {top[1]} laps")
+        else:
+            self.donut.set(0.0, empty=True)
+            self.car_lbl.setText("")
         self.week.set(s["week"])

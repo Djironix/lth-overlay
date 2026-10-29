@@ -28,6 +28,16 @@ Atnaujinta: 2026-10-28 · Dabartinė versija: **v0.6.0** · Toliau: Windows pati
 
 ---
 
+## 0.00 v0.6.2–0.6.3 — Dashboard ir naujas Control Center (GoFast stilius, A variantas)
+- 0.6.2: Overview dashboard (`control/overview_page.py`, `sessions.stats`), Records, Setups (`setups.py`),
+  automatinis sesijų saugojimas (`sessions.py`), pranešimai (`ctx.notify`), telemetrijos zoom, GT3 vairas.
+- 0.6.3: Control Center apvalkalas perdarytas: viršutinė juosta su „piliulėmis“ (`NAV_MAIN`),
+  krumpliaračio meniu (`NAV_MORE` + Quit), varpelis (`ctx.notifications`), profilio „chip'as“ (vardas iš iRacing,
+  `config.data["driver_name"]`), apatinė būsenos juosta (CPU/RAM, Edit layout su klavišų kepurėlėmis,
+  „Overlays on“ = `toggle_hide_all`). Šoninio meniu nebėra. Puslapio antraštė įdedama į puslapio turinį
+  (`_show`), `OWN_HEAD = True` puslapiai jos negauna. Siauram langui `_fit_topnav` glaudina juostą 4 lygiais.
+- Vartotojas atmetė „Pit wall“ (B) variantą — laikomės A (GoFast-like, bet ne kopija).
+
 ## 0.0a v0.6.1 — pataisymai po pirmo bandymo
 
 - **Standings practice / qualify:**

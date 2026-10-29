@@ -405,6 +405,7 @@ class PreviewStage(QWidget):
 
 class WidgetDetailPage(Page):
     MAX_W = 1280
+    OWN_HEAD = True  # turi savo antraštę su ikona
 
     def __init__(self, center, name):
         self.name = name
