@@ -36,6 +36,11 @@ Atnaujinta: 2026-10-28 · Dabartinė versija: **v0.6.0** · Toliau: Windows pati
   `config.data["driver_name"]`), apatinė būsenos juosta (CPU/RAM, Edit layout su klavišų kepurėlėmis,
   „Overlays on“ = `toggle_hide_all`). Šoninio meniu nebėra. Puslapio antraštė įdedama į puslapio turinį
   (`_show`), `OWN_HEAD = True` puslapiai jos negauna. Siauram langui `_fit_topnav` glaudina juostą 4 lygiais.
+- 0.6.4: Appearance perkeltas į pagrindinį meniu (apvadas `hl`, kol neatidarytas, `seen_appearance`),
+  Setups ir Stream - po krumpliaračiu. Overview trasa: `data/tracks/spa.json` (bacinger/f1-circuits, MIT;
+  400 taškų pagal laikrodžio rodyklę nuo boksų tiesiosios + GT3 laiko profilis, simuliuotas ratas 2:17).
+  Po važiavimo - paskutinė trasa iš `maps/`, taškas važiuoja geriausio rato (`_best_lap`) tempu; važiuojant -
+  tikra `player.lap_pct`. `TrackGlow` piešia kontūrą į pixmap, 30 fps tik matomas, ~0.4 ms kadrui.
 - Vartotojas atmetė „Pit wall“ (B) variantą — laikomės A (GoFast-like, bet ne kopija).
 
 ## 0.0a v0.6.1 — pataisymai po pirmo bandymo

@@ -1,4 +1,4 @@
-LTH Overlays 0.6.3
+LTH Overlays 0.6.4
 ==================
 
 In-house iRacing overlays for the LTH community. 35 widgets, all set up from one Control
@@ -7,6 +7,17 @@ Sectors, Session, Race engineer, Flags, Radar, Overtake alert, Rejoin indicator,
 Pit helper, Pit commands, Pit window, Incidents, Stint, Formation, Radio, Fuel, Dash,
 Inputs, G-force, Tyres, Car setting changes, Engine warnings, Track map, Flat track map,
 Weather, Rain Master, Garage cover, Stream chat, Connection and Performance.
+
+New in 0.6.4
+------------
+- Top menu: Overview, Widgets, Layout, Appearance, Telemetry, Records, Drivers. Setups and
+  Stream moved under the gear button. Appearance has a gold outline until you open it once.
+- Overview: the big track is now Spa-Francorchamps with a dot driving a typical GT3 lap
+  (slow through La Source, flat out on Kemmel). After you drive, it shows the last track you
+  drove and the dot runs your own best lap there; while you are in iRacing the dot is you.
+  The animation runs only while the Overview is on screen.
+- Spa outline from github.com/bacinger/f1-circuits (MIT licence, see
+  lth_overlays/data/tracks/LICENSE-f1-circuits.txt).
 
 New in 0.6.3
 ------------

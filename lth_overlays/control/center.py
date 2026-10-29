@@ -31,11 +31,12 @@ from .telemetry_page import TelemetryPage
 from .style import T, icon, qcolor, qss, ui_font
 
 # Viršutinis meniu (GoFast stiliaus „piliulės“) ir nustatymų meniu (krumpliaratis)
-NAV_MAIN = (("overview", "Overview"), ("widgets", "Widgets"), ("layout", "Layout"), ("telemetry", "Telemetry"),
-            ("records", "Records"), ("setups", "Setups"), ("drivers", "Drivers"), ("stream", "Stream"))
-NAV_MORE = (("profiles", "Profiles", "layers"), ("appearance", "Appearance", "palette"), ("hotkeys", "Hotkeys", "keyboard"),
-            ("general", "General", "settings"), ("performance", "Performance", "activity"),
-            ("diagnostics", "Diagnostics", "bug"), ("about", "About", "info"))
+NAV_MAIN = (("overview", "Overview"), ("widgets", "Widgets"), ("layout", "Layout"), ("appearance", "Appearance"),
+            ("telemetry", "Telemetry"), ("records", "Records"), ("drivers", "Drivers"))
+NAV_MORE = (("profiles", "Profiles", "layers"), ("setups", "Setups", "wrench"), ("stream", "Stream", "broadcast"),
+            ("hotkeys", "Hotkeys", "keyboard"), ("general", "General", "settings"),
+            ("performance", "Performance", "activity"), ("diagnostics", "Diagnostics", "bug"), ("about", "About", "info"))
+HIGHLIGHT = "appearance"  # apvestas auksu, kol žmogus jo neatidarė - kad pastebėtų temas
 NAV = ((None, tuple((k, t, "") for k, t in NAV_MAIN)), ("MORE", NAV_MORE))
 PAGES = {"overview": OverviewPage, "widgets": WidgetsPage, "layout": LayoutPage, "profiles": ProfilesPage,
          "appearance": AppearancePage, "hotkeys": HotkeysPage, "general": GeneralPage,
@@ -134,6 +135,9 @@ class ControlCenter(QMainWindow):
             b.clicked.connect(lambda _=False, k=key: self.go(k))
             from PySide6.QtWidgets import QSizePolicy
             b.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)  # niekada nesuspaudžiamas tekstas
+            if key == HIGHLIGHT and not self.ctx.config.data.get("seen_" + key):
+                b.setProperty("hl", True)
+                b.setToolTip("Themes, colours and fonts for your widgets - have a look")
             h.addWidget(b)
             self._nav[key] = b
         h.addStretch(1)
@@ -326,6 +330,13 @@ class ControlCenter(QMainWindow):
         self._current = page
         for k, b in self._nav.items():
             b.setChecked(k == nav_key)
+        hb = self._nav.get(HIGHLIGHT)
+        if nav_key == HIGHLIGHT and hb is not None and hb.property("hl"):
+            hb.setProperty("hl", False)  # pamatė - apvadas nebereikalingas
+            hb.style().unpolish(hb)
+            hb.style().polish(hb)
+            self.ctx.config.data["seen_" + HIGHLIGHT] = True
+            self.ctx.save_config_soon()
         if nav_key != "overview" and not getattr(page, "OWN_HEAD", False) and not getattr(page, "_head_added", False) and hasattr(page, "content"):
             # puslapio antraštė - turinio stulpelio viršuje, kad lygiuotųsi su kortelėmis
             page._head_added = True

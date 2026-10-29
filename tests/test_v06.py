@@ -457,6 +457,12 @@ def test_top_navigation_shell(oapp, qapp):
     assert set(cc._nav) == {k for k, _ in NAV_MAIN}
     acts = [a.text() for a in cc.b_settings.menu().actions() if a.text()]
     assert len(acts) == len(NAV_MORE) + 1 and acts[-1].startswith("Quit")
+    assert "Setups" in acts and "Stream" in acts and "appearance" in cc._nav
+    # Appearance apvestas, kol neatidarytas
+    oapp.config.data.pop("seen_appearance", None)
+    cc._nav["appearance"].setProperty("hl", True)
+    cc.go("appearance")
+    assert not cc._nav["appearance"].property("hl") and oapp.config.data["seen_appearance"]
     cc.go("general")
     qapp.processEvents()
     assert not any(b.isChecked() for b in cc._nav.values())
@@ -483,3 +489,35 @@ def test_top_navigation_shell(oapp, qapp):
     cc._fill_notes()
     assert not cc._notes_hot and any("hello" in a.text() for a in cc.notes_menu.actions())
     cc.hide()
+
+
+def test_spa_outline_and_moving_dot(qapp, engine):
+    """Spa: tikras kontūras (~7 km, pagal laikrodžio rodyklę, La Source - lėčiausia vieta), taškas juda."""
+    import time
+    from lth_overlays.control.overview_page import TrackGlow, _lap_profile, spa_track
+    pts, t = spa_track()
+    assert pts.shape == (400, 2) and t[0] == 0 and np.all(np.diff(t) > 0) and t[-1] < 1
+    x, y = pts[:, 0], pts[:, 1]
+    area = 0.5 * np.sum(x * np.roll(y, -1) - np.roll(x, -1) * y)
+    assert area > 0  # ekrano koordinatėse (y žemyn) teigiamas = pagal laikrodžio rodyklę
+    speed = 1 / np.diff(np.append(t, 1.0))
+    slow = int(np.argmin(speed))
+    assert slow == int(np.argmin(y)) or abs(slow - int(np.argmin(y))) <= 3  # lėčiausia - La Source (šiauriausia)
+    w = TrackGlow()
+    w.resize(300, 300)
+    w.set_points(None)
+    w.show()
+    qapp.processEvents()
+    w._t0 = time.monotonic() - 30
+    a = w._pct_now()
+    w._t0 = time.monotonic() - 60
+    b = w._pct_now()
+    assert 0 < a < b < 1
+    w._step()
+    assert not w.grab().isNull()
+    w.set_live(lambda: 0.5)
+    assert w._pct_now() == 0.5
+    w.hide()
+    assert not w._timer.isActive()
+    prof = _lap_profile(engine.recorder.laps[-1])
+    assert prof is not None and prof[1][0] == 0 and prof[1][-1] <= 1.0 and prof[2] > 0

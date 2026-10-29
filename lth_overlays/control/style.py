@@ -84,6 +84,7 @@ QFrame#StatusBar {{ background: {T['surface']}; border: 1px solid {T['border']};
 QPushButton#NavPill {{ background: transparent; border: none; border-radius: 12px; padding: 9px 16px;
                        color: {T['muted']}; font-size: 14px; font-weight: 500; }}
 QPushButton#NavPill:hover {{ color: {T['text']}; background: transparent; }}
+QPushButton#NavPill[hl="true"] {{ border: 2px solid {T['accent']}; color: {T['accent']}; padding: 7px 14px; }}
 QPushButton#NavPill:checked {{ background: {T['accent']}; color: {T['accent_text']}; font-weight: 700; border: none; }}
 QPushButton#IconBtn {{ background: {T['surface2']}; border: 1px solid {T['border2']}; border-radius: 12px; padding: 0; }}
 QPushButton#IconBtn:hover {{ background: {T['surface3']}; }}
