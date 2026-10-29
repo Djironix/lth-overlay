@@ -94,7 +94,9 @@ class SessionStore:
         data = {"track": m.get("track"), "track_key": m.get("track_key"), "car": m.get("car"),
                 "car_name": m.get("car_name"), "driver": m.get("driver"), "type": m.get("session_type"),
                 "subsession": m.get("subsession"), "started": old.get("started") or m.get("date"),
-                "updated": time.strftime("%Y-%m-%d %H:%M"), "laps": times, "best": min(valid) if valid else None}
+                "updated": time.strftime("%Y-%m-%d %H:%M"), "laps": times, "best": min(valid) if valid else None,
+                "position": laps[-1].meta.get("position") or old.get("position"),
+                "driven_s": round(sum(v[0] for v in times.values()), 1)}
         try:
             tmp = path + ".tmp"
             with open(tmp, "w", encoding="utf-8") as fh:
@@ -150,3 +152,34 @@ class SessionStore:
             except (OSError, ValueError, KeyError):
                 continue
         return laps
+
+
+def stats(items, now: float | None = None) -> dict:
+    """Statistika Dashboard'ui iš sesijų santraukų: ratai ir laikas šį mėnesį, paskutinė sesija,
+    dažniausia mašina, šios savaitės ratai pagal dienas (pirmadienis pirmas)."""
+    import datetime as dt
+    now_d = dt.datetime.fromtimestamp(now) if now else dt.datetime.now()
+    month = now_d.strftime("%Y-%m")
+    monday = (now_d - dt.timedelta(days=now_d.weekday())).date()
+    laps_m, time_m = 0, 0.0
+    cars = {}
+    week = [0] * 7
+    for _, m in items:
+        started = str(m.get("started") or "")
+        n = len(m.get("laps") or {})
+        secs = float(m.get("driven_s") or sum(v[0] for v in (m.get("laps") or {}).values()))
+        if started.startswith(month):
+            laps_m += n
+            time_m += secs
+        name = m.get("car_name") or m.get("car") or "?"
+        cars[name] = cars.get(name, 0) + n
+        try:
+            d = dt.datetime.strptime(started[:10], "%Y-%m-%d").date()
+            if monday <= d < monday + dt.timedelta(days=7):
+                week[(d - monday).days] += n
+        except ValueError:
+            pass
+    total = sum(cars.values())
+    top = max(cars.items(), key=lambda kv: kv[1]) if cars else None
+    return {"laps_month": laps_m, "time_month_s": time_m, "latest": items[0][1] if items else None,
+            "top_car": (top[0], top[1], top[1] / total if total else 0.0) if top else None, "week": week}

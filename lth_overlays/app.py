@@ -262,6 +262,11 @@ class OverlayApp(QObject):
         from .sessions import SessionStore
         self.sessions = SessionStore(os.path.join(os.path.dirname(config.path) if getattr(config, "path", None)
                                                   else app_dir(), "sessions"))
+        from .setups import SetupLibrary
+        base_dir = os.path.dirname(config.path) if getattr(config, "path", None) else app_dir()
+        self.setups = SetupLibrary(os.path.join(base_dir, "setups"))
+        self.notifications = []  # [(laikas, tekstas)] - naujausi gale
+        self._setups_car = None
         from .pb import PersonalBests
         self.pbs = PersonalBests(os.path.join(os.path.dirname(config.path), "pb.json")
                                  if getattr(config, "path", None) else None)
@@ -469,6 +474,27 @@ class OverlayApp(QObject):
         self._hotkeys = out
         return out
 
+    def notify(self, text: str):
+        """Pranešimas Control Center'yje (jei atidarytas) ir pranešimų sąraše."""
+        self.notifications.append((time.time(), text))
+        del self.notifications[:-30]
+        if self.control is not None and self.control.isVisible():
+            self.control.toast(text)
+
+    def _auto_install_setups(self, snap):
+        car = snap.car_key
+        st = self.config.data.get("setups") or {}
+        if not car or car == self._setups_car or not st.get("auto", False):
+            return
+        self._setups_car = car
+        try:
+            n = self.setups.install(car)
+        except OSError:
+            n = 0
+        if n:
+            me = next((r for r in snap.cars if r.is_me), None)
+            self.notify(f"{n} LTH setup{'s' if n != 1 else ''} installed for {me.car_short if me else car}")
+
     def next_profile(self):
         keys = list(self.config.data.get("profiles") or {})
         if len(keys) < 2:
@@ -524,7 +550,10 @@ class OverlayApp(QObject):
             snap = self.preview_snapshot()
         if snap.connected:
             if self._tick % 10 == 5:
-                self.pbs.observe(snap)
+                if self.pbs.observe(snap) and self.pbs.new_pb_t:
+                    from lth_timing.telemetry import fmt
+                    self.notify(f"New personal best {fmt(snap.player.best_lap)}  ·  {snap.track_name}")
+                self._auto_install_setups(snap)
                 if (self.config.data.get("telemetry") or {}).get("auto_save_best", True):
                     from .control.telemetry_page import autosave_best
                     tm = getattr(self.engine.timing, "trackmap", None)

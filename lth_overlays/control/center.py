@@ -20,17 +20,19 @@ from ..config import app_dir
 from ..registry import WIDGETS
 from .components import Combo, IconTile, NavButton, Pill, button, label
 from .layout_page import LayoutPage
-from .pages import (AboutPage, AppearancePage, DiagnosticsPage, GeneralPage, HotkeysPage, OverviewPage,
-                    PerformancePage, ProfilesPage, WidgetDetailPage, WidgetsPage)
+from .overview_page import OverviewPage
+from .pages import (AboutPage, AppearancePage, DiagnosticsPage, GeneralPage, HotkeysPage, PerformancePage,
+                    ProfilesPage, WidgetDetailPage, WidgetsPage)
 from .preview import PreviewRenderer
 from .drivers_page import DriversPage
 from .stream_page import StreamPage
+from .library_pages import RecordsPage, SetupsPage
 from .telemetry_page import TelemetryPage
 from .style import T, qss, ui_font
 
 NAV = (
     (None, (("overview", "Overview", "home"), ("widgets", "Widgets", "widgets"), ("layout", "Layout", "layout"),
-           ("telemetry", "Telemetry", "delta"))),
+           ("telemetry", "Telemetry", "delta"), ("records", "Records", "flag"), ("setups", "Setups", "wrench"))),
     ("CUSTOMIZE", (("profiles", "Profiles", "layers"), ("appearance", "Appearance", "palette"),
                    ("drivers", "Drivers", "star"),
                    ("hotkeys", "Hotkeys", "keyboard"), ("stream", "Stream", "broadcast"))),
@@ -41,7 +43,7 @@ PAGES = {"overview": OverviewPage, "widgets": WidgetsPage, "layout": LayoutPage,
          "appearance": AppearancePage, "hotkeys": HotkeysPage, "general": GeneralPage,
          "performance": PerformancePage, "diagnostics": DiagnosticsPage, "about": AboutPage,
          "stream": StreamPage, "drivers": DriversPage,
-         "telemetry": TelemetryPage}
+         "telemetry": TelemetryPage, "records": RecordsPage, "setups": SetupsPage}
 
 
 class ControlCenter(QMainWindow):
@@ -75,6 +77,36 @@ class ControlCenter(QMainWindow):
         h.addLayout(main, 1)
         self.setCentralWidget(root)
         self.setAcceptDrops(True)
+
+    # ------------------------------------------------------------------ pranešimai
+    def toast(self, text: str):
+        """Trumpas pranešimas apatiniame dešiniajame kampe (pvz. naujas rekordas, įdiegti setupai)."""
+        from PySide6.QtCore import QTimer
+        t = getattr(self, "_toast", None)
+        if t is None:
+            t = self._toast = QFrame(self)
+            t.setObjectName("Toast")
+            t.setStyleSheet(f"QFrame#Toast {{ background: {T['surface']}; border: 1px solid {T['accent']};"
+                            f" border-radius: 12px; }} QLabel {{ color: {T['text']}; font-size: 13px; }}")
+            lay = QHBoxLayout(t)
+            lay.setContentsMargins(16, 12, 16, 12)
+            t.lbl = QLabel()
+            lay.addWidget(t.lbl)
+            t.timer = QTimer(t)
+            t.timer.setSingleShot(True)
+            t.timer.timeout.connect(t.hide)
+        t.lbl.setText(text)
+        t.adjustSize()
+        t.move(self.width() - t.width() - 24, self.height() - t.height() - 24)
+        t.raise_()
+        t.show()
+        t.timer.start(6000)
+
+    def resizeEvent(self, e):
+        super().resizeEvent(e)
+        t = getattr(self, "_toast", None)
+        if t is not None and t.isVisible():
+            t.move(self.width() - t.width() - 24, self.height() - t.height() - 24)
 
     # ------------------------------------------------------------------ rėmas
     def _sidebar(self):

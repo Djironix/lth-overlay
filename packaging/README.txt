@@ -1,4 +1,4 @@
-LTH Overlays 0.6.1
+LTH Overlays 0.6.2
 ==================
 
 In-house iRacing overlays for the LTH community. 35 widgets, all set up from one Control
@@ -7,6 +7,25 @@ Sectors, Session, Race engineer, Flags, Radar, Overtake alert, Rejoin indicator,
 Pit helper, Pit commands, Pit window, Incidents, Stint, Formation, Radio, Fuel, Dash,
 Inputs, G-force, Tyres, Car setting changes, Engine warnings, Track map, Flat track map,
 Weather, Rain Master, Garage cover, Stream chat, Connection and Performance.
+
+New in 0.6.2
+------------
+- Inputs: the traces no longer flicker on sharp inputs, the brake line stays yellow exactly
+  where ABS worked, new GT3-style wheel with a red centre mark (turns the right way) and a
+  big speed readout under it. Scales with the widget size on any monitor.
+- Telemetry: every practice / qualifying / race is saved automatically (last 50 sessions)
+  and can be opened again from "Session". Drag across the graphs to zoom into a corner
+  (like Garage61) or click a corner on the track map. ABS shown on its own strip and as an
+  orange background on the brake graph.
+- Weather: humidity and track usage (rubber at the start of the session, as iRacing reports
+  it: words plus level of 5), bigger classic compass (north up, wind arrow, your heading).
+- New Overview dashboard: laps and time this month, latest session, most driven car, laps
+  per day this week.
+- Records page: your all-time best lap per car and track, open it in Telemetry.
+- Setups page: import LTH setup packs (.zip) and install them into
+  Documents\iRacing\setups\<car>\LTH automatically when you join a session.
+- Drivers: optional one-click lists for the LTH team and the Lithuanian iRacing Hub.
+- Notifications in the Control Center (new personal best, setups installed).
 
 New in 0.6.1
 ------------
@@ -89,7 +108,9 @@ Control Center
   Others use "Import layout" (or drop the file on the Control Center). It is added as a
   new profile and scaled to their screen.
 - Appearance: 10 themes (incl. LTH), 33 fonts, outline, single colours and car class colours.
-- Drivers: tag friends / teammates / rivals (by iRacing ID or from the current session).
+- Drivers: tag friends / teammates / rivals (by iRacing ID or from the current session), or add
+  the LTH team / Lithuanian iRacing Hub lists in one click.
+- Records and Setups: personal bests, LTH setup packs.
 - Telemetry: session report and lap comparison, import / export .lthlap files.
 - Stream: OBS browser source URLs (Copy button for each widget or the whole layout).
 - Hotkeys, General (startup, timing, track maps), Performance, Diagnostics.

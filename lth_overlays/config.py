@@ -38,6 +38,7 @@ DEFAULT_CONFIG = {
     "hotkeys": {"edit": "Ctrl+Shift+E", "toggle_all": "Ctrl+Shift+H", "rain_next": "Ctrl+Shift+R"},
     "open_control_center": True,
     "onboarding_done": False,  # pirmo paleidimo tutorialas  # atidaryti Control Center paleidus ranka
+    "setups": {"auto": False},  # LTH setupų automatinis įdiegimas prisijungus prie sesijos
     "fps_cap": 0,  # Eco: visų „smooth“ valdiklių fps riba (0 = be ribos)
     "telemetry": {"record": True, "hz": 30, "auto_save_best": True, "save_sessions": True},  # savo ratų telemetrija
     "obs": {"enabled": False, "port": 8399, "fps": 30},  # OBS Browser Source serveris (tik 127.0.0.1)

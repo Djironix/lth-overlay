@@ -349,7 +349,11 @@ class InputsWidget(PanelWidget):
         tr, thr, brk, clu, abs_on, speed, gear, steer, seq = self._view
         r = QRectF(self.rect())
         pal = self.pal
-        L = self._layout(r)
+        lkey = (self.width(), self.height(), id(self.fonts), tuple(sorted((k, repr(v)) for k, v in self.cfg.items()
+                                                                          if k.startswith("show"))))
+        if getattr(self, "_lay", (None,))[0] != lkey:
+            self._lay = (lkey, self._layout(r))
+        L = self._lay[1]
         pad, graph, bw, nbars = L["pad"], L["graph"], L["bw"], L["nbars"]
         bar_top = graph.top() + L["lab_h"]
         # fonas, tinklelis ir juostų pagrindai nesikeičia - paruošiami vieną kartą
@@ -383,7 +387,7 @@ class InputsWidget(PanelWidget):
         self._drew_bg = True
 
         pen_w = max(1.5, self._scale() * 1.8)
-        buckets = max(8, int(graph.width() / 2))  # grupė ~2 px, min + max = ~1 taškas pikseliui
+        buckets = max(8, int(graph.width() / 5))  # grupė ~5 px (min + max): pikai lieka, piešti pigu
 
         def to_poly(idx, v, n, center, scale):
             v = np.clip(v * scale, -1, 1) if center else np.clip(v, 0, 1)

@@ -402,3 +402,47 @@ def test_suggested_driver_lists_are_optional(oapp, qapp):
     dp._toggle_list("hub")
     assert list(oapp.config.data["friends"]) == ["1372638"]
     oapp.control.hide()
+
+
+def test_setup_pack_import_is_safe(tmp_path):
+    import zipfile
+    from lth_overlays.setups import SetupLibrary
+    z = tmp_path / "pack.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("LTH pack/bmwm4gt3/spa/race.sto", "x")
+        f.writestr("../../evil.sto", "bad")
+        f.writestr("porsche992rgt3/quali.sto", "q")
+        f.writestr("virus.exe", "no")
+    lib = SetupLibrary(str(tmp_path / "lib"))
+    res = lib.import_files([str(z)], car_hint="ferrari296gt3")
+    assert res.get("bmwm4gt3") == 1 and res.get("porsche992rgt3") == 1
+    files = [os.path.relpath(os.path.join(r, n), lib.root) for r, _, fs in os.walk(lib.root) for n in fs]
+    assert all(not f.startswith("..") for f in files) and not any(f.endswith(".exe") for f in files)
+    assert os.path.isfile(os.path.join(lib.root, "bmwm4gt3", "spa", "race.sto"))
+
+
+def test_dashboard_stats():
+    import datetime
+    from lth_overlays.sessions import stats
+    items = [("a", {"started": "2026-10-29 20:50", "laps": {"1": [100, True, False], "2": [101, True, False]},
+                    "car_name": "BMW", "type": "race"}),
+             ("b", {"started": "2026-10-27 10:00", "laps": {"1": [90, True, False]}, "car_name": "Porsche"}),
+             ("c", {"started": "2026-09-30 10:00", "laps": {"1": [90, True, False], "2": [1, 1, 1]}, "car_name": "BMW"})]
+    s = stats(items, datetime.datetime(2026, 10, 29, 21, 0).timestamp())
+    assert s["laps_month"] == 3 and s["time_month_s"] == pytest.approx(291)
+    assert s["week"] == [0, 1, 0, 2, 0, 0, 0]  # 2026-10-27 antradienis, 10-29 ketvirtadienis
+    assert s["top_car"][0] == "BMW" and s["top_car"][1] == 4
+
+
+def test_new_control_center_pages(oapp, qapp, engine):
+    oapp.config.data["onboarding_done"] = True
+    oapp.engine.timing = engine
+    oapp.sessions.observe(engine.recorder)
+    oapp.open_control_center()
+    cc = oapp.control
+    for page in ("overview", "records", "setups", "telemetry", "drivers"):
+        cc.go(page)
+        qapp.processEvents()
+        assert not cc.grab().isNull()
+    oapp.notify("test toast")
+    cc.hide()
