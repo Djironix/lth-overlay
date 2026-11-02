@@ -15,6 +15,7 @@ import os
 import re
 import threading
 import time
+import urllib.error
 import urllib.request
 
 from lth_timing import VERSION
@@ -121,6 +122,9 @@ class Updater:
         def work():
             try:
                 self._result = ("check", True, check_release(self.repo))
+            except urllib.error.HTTPError as e:
+                # 404 = repo dar neturi nė vieno išleidimo - tai ne klaida
+                self._result = ("check", True, None) if e.code == 404 else ("check", False, f"HTTP {e.code}")
             except Exception as e:  # noqa: BLE001
                 self._result = ("check", False, str(e))
         self._thread = threading.Thread(target=work, daemon=True, name="lth-update-check")
@@ -185,6 +189,11 @@ class Updater:
                     self.ctx.notify("Could not check for updates")
                 return
             self.info = data
+            if data is None:
+                self.state = "idle"
+                if getattr(self, "_manual", False):
+                    self.ctx.notify(f"LTH Overlays {VERSION} is up to date")
+                return
             if self.newer():
                 announce = self.state != "available"
                 self.state = "available"
