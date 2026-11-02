@@ -9,7 +9,11 @@ Output: dist/LTH Overlays/ and dist/LTH-Overlays-<version>-win64.zip
 Antivirus-friendly by design:
 - no PyInstaller one-file / UPX packing (the most common false-positive trigger);
 - plain portable Python + readable .py files + a tiny launcher with version info;
-- nothing is written to the registry, no admin rights, no auto-download of code.
+- nothing is written to the registry, no admin rights;
+- updates are only downloaded when the user clicks "Update" (GitHub Releases, SHA-256 checked).
+
+Also writes dist/LTH-Overlays-<version>-update.zip (+ .sha256): only the app/ folder, used by the
+in-app updater when the Python / Qt runtime did not change (runtime.txt).
 """
 from __future__ import annotations
 
@@ -53,7 +57,15 @@ PRUNE_GLOBS = [
 ]
 PRUNE_PY = ["Lib/test", "Lib/idlelib", "Lib/tkinter", "Lib/turtledemo", "Lib/ensurepip", "Lib/lib2to3",
             "tcl", "DLLs/_tkinter.pyd", "DLLs/tcl*.dll", "DLLs/tk*.dll", "Scripts"]
-APP_ITEMS = ["run.py", "lth_timing", "lth_overlays", "tools/diagnose.py"]
+APP_ITEMS = ["run.py", "lth_boot.py", "lth_timing", "lth_overlays", "tools/diagnose.py"]
+
+
+def runtime_id() -> str:
+    """Python + paketų rinkinio žymė. Pasikeitus - programos atnaujinimui reikia pilno zip."""
+    import re
+    py = re.search(r"cpython-([\d.]+)", PY_URL).group(1)
+    qt = next((p.split("==")[1] for p in PACKAGES if p.startswith("PySide6")), "x")
+    return f"py{py}-qt{qt}"
 
 
 def log(*a):
@@ -135,8 +147,28 @@ def main():
         shutil.copy2(os.path.join(ROOT, "packaging", "launcher", exe), os.path.join(target, exe))
     shutil.copy2(os.path.join(ROOT, "packaging", "README.txt"), os.path.join(target, "README.txt"))
 
+    with open(os.path.join(target, "runtime.txt"), "w", encoding="utf-8") as fh:
+        fh.write(runtime_id() + "\n")
+
     if args.sign:
         sign(target)
+
+    # atnaujinimo zip: tik app/ (programos atnaujinimas per Control Center)
+    import hashlib
+    upath = os.path.join(args.out, f"LTH-Overlays-{VERSION}-update.zip")
+    rm(upath)
+    with zipfile.ZipFile(upath, "w", zipfile.ZIP_DEFLATED, compresslevel=9) as z:
+        for dp, _, files in os.walk(app):
+            for f in files:
+                full = os.path.join(dp, f)
+                z.write(full, "app/" + os.path.relpath(full, app).replace(os.sep, "/"))
+        z.writestr("update.json", f'{{"version": "{VERSION}", "runtime": "{runtime_id()}"}}')
+    h = hashlib.sha256(open(upath, "rb").read()).hexdigest()
+    with open(upath + ".sha256", "w", encoding="utf-8") as fh:
+        fh.write(f"{h}  {os.path.basename(upath)}\n")
+    with open(os.path.join(args.out, "runtime.txt"), "w", encoding="utf-8") as fh:
+        fh.write(runtime_id() + "\n")
+    log(f"update zip {os.path.getsize(upath) / 1048576:.1f} MB -> {upath}")
 
     log(f"folder size {size_mb(target):.0f} MB")
     zpath = os.path.join(args.out, f"LTH-Overlays-{VERSION}-win64.zip")

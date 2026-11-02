@@ -22,7 +22,7 @@ STANDINGS_COLUMNS = {
     "name": ("Name", True),
     "brand": ("Car (manufacturer badge)", True),
     "carname": ("Car model name", False),
-    "pit": ("Pit / status", True),
+    "pit": ("Pit / status (last stop: lap and time)", True),
     "gap": ("Gap to leader", True),
     "interval": ("Interval", True),
     "last": ("Last lap", True),
@@ -32,6 +32,10 @@ STANDINGS_COLUMNS = {
     "irating": ("iRating", True),
     "irchange": ("iRating change (projected)", False),
     "tire": ("Tyres", True),
+    "pitstops": ("Pit stops", False),
+    "lapsdone": ("Laps completed", False),
+    "laps": ("Last laps (green = faster, red = slower)", False),
+    "delta": ("Delta per lap (cars near you)", False),
 }
 
 RELATIVE_COLUMNS = {
@@ -41,15 +45,32 @@ RELATIVE_COLUMNS = {
     "name": ("Name", True),
     "brand": ("Car (manufacturer badge)", True),
     "carname": ("Car model name", False),
-    "status": ("Pit / status badges", True),
+    "status": ("Pit / status (last stop: lap and time)", True),
     "license": ("License (coloured)", True),
     "irating": ("iRating", True),
     "irchange": ("iRating change (projected)", False),
     "last": ("Last lap", False),
     "best": ("Best lap", False),
+    "change": ("Change this lap", False),
+    "start": ("Positions since start", False),
+    "leadergap": ("Gap to class leader", False),
+    "interval": ("Interval to car ahead in class", False),
+    "tire": ("Tyres", False),
+    "pitstops": ("Pit stops", False),
+    "lapsdone": ("Laps completed", False),
+    "laps": ("Last laps (green = faster, red = slower)", False),
     "delta": ("Delta per lap", True),
     "catch": ("Laps to catch", False),
     "gap": ("Gap", True),
+}
+
+
+# Inputs valdiklio dalys (tvarka iš kairės į dešinę)
+INPUT_PARTS = {
+    "graph": ("Traces (throttle, brake, steering)", True),
+    "bars": ("Pedal bars", True),
+    "abs": ("ABS light", False),
+    "wheel": ("Steering wheel with gear and speed", True),
 }
 
 # Informacija antraštėje / apatinėje juostoje (Standings, Relative)
@@ -134,9 +155,21 @@ class WidgetSpec:
     rate: int = 2  # UI atnaujinimas kas N × 0,1 s
     needs_inputs: bool = False  # reikia 60 Hz input'ų buferio
     has_header: bool = True
+    base: str = ""  # kopijai - originalaus valdiklio pavadinimas
 
     def load(self):
-        return getattr(importlib.import_module(self.module), self.cls)
+        cls = getattr(importlib.import_module(self.module), self.cls)
+        if self.base:  # kopija: ta pati klasė, bet savi nustatymai (NAME)
+            key = (cls, self.name)
+            sub = _COPY_CLASSES.get(key)
+            if sub is None:
+                sub = type(f"{cls.__name__}_{self.name}", (cls,), {"NAME": self.name})
+                _COPY_CLASSES[key] = sub
+            return sub
+        return cls
+
+
+_COPY_CLASSES = {}
 
 
 CATEGORIES = ("Timing", "Race", "Car", "Track", "Stream", "System")
@@ -154,7 +187,8 @@ COMMON_FIELDS = [
           spec={"practice": ("Practice", True), "qualify": ("Qualifying", True), "warmup": ("Warmup", True),
                 "race": ("Race", True)}),
     Field("scale", "Size", "percent", 1.0, 0.5, 3.0, 0.05, group="Look"),
-    Field("opacity", "Background opacity", "percent", 1.0, 0.2, 1.0, 0.05, group="Look"),
+    Field("opacity", "Background opacity", "percent", 1.0, 0.0, 1.0, 0.05, group="Look",
+          help="0% = no background at all (minimal look). Turn the Outline off too for a clean view"),
     Field("outline_mode", "Outline", "choice", "global", group="Look",
           options={"global": "Global", "off": "Off", "custom": "Custom"},
           help="Global = the outline set in Appearance"),
@@ -163,6 +197,42 @@ COMMON_FIELDS = [
     Field("outline_opacity", "Outline opacity", "percent", 0.8, 0.1, 1.0, 0.05, group="Look"),
 ]
 HEADER_FIELD = Field("show_header", "Show header", "bool", True, group="Look")
+
+
+def look_fields():
+    """iRating, boksų ir vėliavų išvaizda (Standings ir Relative)."""
+    return [
+        Field("pit_style", "Pit column shows", "choice", "stop", group="Columns",
+              options={"stop": "Last stop: lap and time (L23 34s)", "since": "Laps since the stop",
+                       "both": "Last stop + laps since"},
+              help="While a car is in the pit lane: PIT with the seconds so far"),
+        Field("status_icons", "Black / meatball / DQ / blue as flag icons", "bool", True, group="Columns"),
+        Field("irating_style", "iRating shows as", "choice", "badge", group="Columns",
+              options={"badge": "Coloured block", "text": "Plain text"},
+              help="Block colour by level: grey < 1.5k, blue 2k+, green 3k+, gold 4k+, purple 5k+"),
+        Field("flag_style", "Country flags", "choice", "3d", group="Look", options={"3d": "3D waving", "flat": "Flat"}),
+        Field("flag_frame", "Flag frame", "choice", "none", group="Look",
+              options={"none": "None", "dark": "Dark", "white": "White", "accent": "Theme colour"}),
+    ]
+
+
+def brand_field():
+    return Field("brand_style", "Car (manufacturer) shows", "choice", "logo", group="Columns",
+                 options={"logo": "Logo", "badge": "Coloured badge (POR, BMW...)"},
+                 help="Add or replace logos in Appearance > Car logos. Brands without a logo keep the badge")
+
+
+def laps_fields():
+    """Last laps stulpelio nustatymai (Standings ir Relative)."""
+    return [
+        Field("laps_n", "Last laps: how many", "choice", "5", group="Columns", options={"5": "5 laps", "10": "10 laps"}),
+        Field("laps_style", "Last laps: show as", "choice", "delta", group="Columns",
+              options={"delta": "Difference (+0.4 / -0.2)", "squares": "Coloured squares", "times": "Lap times"}),
+        Field("laps_ref", "Last laps: compare with", "choice", "my_pace", group="Columns",
+              options={"my_pace": "My pace (median of my last 5 clean laps)", "my_last": "My last lap",
+                       "their_best": "Their own best lap", "their_avg": "Their own average"},
+              help="Green = faster than this, red = slower. Their own best / average shows if someone has damage"),
+    ]
 
 W = WidgetSpec
 WIDGETS: list[WidgetSpec] = [
@@ -193,10 +263,15 @@ WIDGETS: list[WidgetSpec] = [
           Field("columns", "Columns", "columns", None, spec=STANDINGS_COLUMNS, group="Columns"),
           Field("column_header", "Column titles", "bool", True, group="Columns",
                 help="Thin row with column names (P, #, DRIVER, GAP...) under the title"),
+      ] + laps_fields() + [brand_field()] + look_fields() + [
           Field("header_items", "Header", "items", None, spec=INFO_ITEMS, group="Header & footer",
                 help="Shown on the right of the title bar"),
           Field("footer_items", "Footer", "items", None, spec=FOOTER_ITEMS, group="Header & footer",
                 help="Bar under the table. Empty = no footer"),
+          Field("header_align", "Header info position", "choice", "right", group="Header & footer",
+                options={"left": "Left", "center": "Centre", "right": "Right"}),
+          Field("footer_align", "Footer info position", "choice", "left", group="Header & footer",
+                options={"left": "Left", "center": "Centre", "right": "Right"}),
       ]),
     W("relative", "Relative", "Timing", "Cars closest to you on track with gap and closing delta per lap.",
       "lth_overlays.widgets.relative", "RelativeWidget", "relative",
@@ -216,10 +291,15 @@ WIDGETS: list[WidgetSpec] = [
           Field("columns", "Columns", "columns", None, spec=RELATIVE_COLUMNS, group="Columns"),
           Field("column_header", "Column titles", "bool", True, group="Columns",
                 help="Thin row with column names (P, #, DRIVER, GAP...) under the title"),
+      ] + laps_fields() + [brand_field()] + look_fields() + [
           Field("header_items", "Header", "items", None, spec=INFO_ITEMS, group="Header & footer",
                 help="Shown on the right of the title bar"),
           Field("footer_items", "Footer", "items", None, spec=FOOTER_ITEMS, group="Header & footer",
                 help="Bar under the table. Empty = no footer"),
+          Field("header_align", "Header info position", "choice", "right", group="Header & footer",
+                options={"left": "Left", "center": "Centre", "right": "Right"}),
+          Field("footer_align", "Footer info position", "choice", "left", group="Header & footer",
+                options={"left": "Left", "center": "Centre", "right": "Right"}),
       ]),
     W("battle", "Battle analysis", "Timing", "Where you gain and lose against the cars just ahead and behind, "
       "sector by sector on the last lap.", "lth_overlays.widgets.timing", "BattleWidget", "swords",
@@ -281,15 +361,37 @@ WIDGETS: list[WidgetSpec] = [
     W("flags", "Flags", "Race", "Big flag banner: yellow, blue, black, white, chequered, meatball.",
       "lth_overlays.widgets.race", "FlagsWidget", "flag",
       {"x": -1, "y": 230, "width": 380, "height": None}, rate=1, has_header=False, fields=[
-          Field("show_green", "Show green flag at start", "bool", False),
+          Field("style", "Style", "choice", "banner", group="Look",
+                options={"banner": "Banner with text", "tile": "Flag tile", "wave": "Waving flag",
+                         "led": "LED panel (trackside)", "light": "Marshal light", "strip": "Thin colour strip"},
+                help="Tile, waving flag and light are square: make a copy (Duplicate) to put several around the screen"),
+          Field("label", "Flag name under the tile / light", "bool", True, group="Look"),
+          Field("only", "Shows these flags", "checks", None, spec={
+              "yellow": ("Yellow / caution / debris", True), "blue": ("Blue", True),
+              "black": ("Black / meatball / DQ", True), "red": ("Red", True), "white": ("White (last lap)", True),
+              "checkered": ("Chequered", True), "start": ("Green / formation", True)},
+                help="With copies: e.g. one blue-flag tile near your mirrors and one for everything else"),
+          Field("show_green", "Start flags (formation, one to green, green)", "bool", False),
           Field("hold", "Keep short flags for", "float", 4.0, 1.0, 15.0, 1.0, suffix=" s"),
-          Field("blue_outside_race", "Blue flag in practice / qualifying", "bool", False,
-                help="In races blue only shows when a car lapping you is really close behind"),
+          Field("blue_early", "Blue early: faster car right behind", "bool", True,
+                help="Shows blue as soon as a car lapping you or a faster class is close behind, even before iRacing does"),
+          Field("blue_window", "Blue early when the faster car is within", "float", 1.5, 0.5, 4.0, 0.5, suffix=" s"),
+          Field("blue_strict", "Hide iRacing's blue when nobody faster is close", "bool", False,
+                help="Off = iRacing's blue flag always shows (recommended)"),
+          Field("blue_outside_race", "Blue flag in practice / qualifying", "bool", False),
       ]),
-    W("radar", "Radar", "Race", "Cars alongside and close behind / ahead, in metres.",
+    W("radar", "Radar / Blind spot", "Race", "Cars alongside and close behind / ahead. As a radar, side bars or "
+      "arrows - Duplicate it to put a blind spot block on each side of your screen.",
       "lth_overlays.widgets.race", "RadarWidget", "radar",
       {"x": -1, "y": -380, "width": 150, "height": 190}, rate=1, has_header=False, fields=[
-          Field("range", "Range", "int", 20, 8, 50, suffix=" m"),
+          Field("style", "Style", "choice", "radar", group="Look",
+                options={"radar": "Radar (top view)", "bars": "Blind spot bars", "arrows": "Blind spot arrows"}),
+          Field("side", "Side", "choice", "both", group="Look",
+                options={"both": "Both sides", "left": "Left only", "right": "Right only"},
+                help="Bars / arrows: one side per copy lets you place them anywhere, e.g. next to your mirrors"),
+          Field("range", "Range", "int", 20, 8, 50, suffix=" m", help="Radar style"),
+          Field("overlap_text", "Overlap in metres next to the side car", "bool", True,
+                help="How far the car alongside is ahead (+) or behind - like a spotter"),
           Field("always", "Show when nobody is close", "bool", False),
       ]),
     W("overtake_alert", "Overtake alert", "Race", "Multiclass: a faster class closing from behind, or a slower "
@@ -328,7 +430,11 @@ WIDGETS: list[WidgetSpec] = [
       "lth_overlays.widgets.race", "IncidentsWidget", "alert",
       {"x": 540, "y": 24, "width": 180, "height": None}, rate=2, fields=[
           Field("limit", "Incident limit", "int", 0, 0, 200, help="0 = take it from the session (shown when the race has one)"),
-          Field("popup", "Popup time", "float", 5.0, 1.0, 15.0, 1.0, suffix=" s"),
+          Field("display", "Show", "choice", "always",
+                options={"always": "Always visible", "popup": "Only when I get an incident"},
+                help="Only when I get an incident = the widget pops up for the popup time, then hides"),
+          Field("popup", "Popup time", "float", 5.0, 1.0, 15.0, 1.0, suffix=" s",
+                help="How long the red flash (or the popup) stays after a new incident"),
       ]),
     W("stint", "Stint", "Race", "Stint time and laps, driver changes for team races.",
       "lth_overlays.widgets.race", "StintWidget", "timer",
@@ -370,14 +476,15 @@ WIDGETS: list[WidgetSpec] = [
       "InputsWidget", "pedals", {"x": -760, "y": -170, "width": 420, "height": 110}, rate=1, needs_inputs=True,
       has_header=False, fields=[
           Field("seconds", "Trace length", "float", 4.0, 2.0, 6.0, 0.5, suffix=" s"),
+          Field("parts", "Parts and their order", "items", None, spec=INPUT_PARTS,
+                help="Turn parts on or off and drag them to change the order from left to right "
+                     "(e.g. wheel first, pedals in front of the traces)"),
           Field("show_clutch", "Clutch", "bool", False),
-          Field("show_steering", "Steering", "bool", True),
-          Field("show_bars", "Pedal bars", "bool", True),
+          Field("show_steering", "Steering line in the traces", "bool", True),
           Field("show_percent", "Pedal percentages", "bool", True),
-          Field("show_abs", "ABS light", "bool", False,
-                help="A square that lights up while ABS is working (cars with ABS only)"),
-          Field("show_wheel", "Steering wheel with gear", "bool", True),
-          Field("show_speed", "Speed in the wheel", "bool", True),
+          Field("show_speed", "Speed under the wheel", "bool", True),
+          Field("wheel_image", "Wheel image", "image", "", group="Look",
+                help="Your own PNG (transparent background, wheel pointing straight up). It turns with your wheel"),
           Field("unit", "Speed unit", "choice", "kmh", options={"kmh": "km/h", "mph": "mph"}),
           Field("smooth", "Smooth (up to 60 fps)", "bool", True,
                 help="Reads telemetry directly, independent of the other widgets. Costs a little more CPU."),
@@ -461,6 +568,8 @@ WIDGETS: list[WidgetSpec] = [
       "Read-only, no login needed.",
       "lth_overlays.widgets.chat", "ChatWidget", "chat",
       {"x": 24, "y": -360, "width": 340, "height": 300}, rate=2, fields=[
+          Field("hide_offline", "Only while the stream is live", "bool", True,
+                help="Hidden (and old messages cleared) when you are not live on Twitch / YouTube"),
           Field("twitch", "Twitch channel", "text", "", help="Channel name or link, e.g. twitch.tv/lthracing"),
           Field("youtube", "YouTube", "text", "",
                 help="Live video link, or your channel (@handle) to follow whatever is live. "
@@ -476,9 +585,16 @@ WIDGETS: list[WidgetSpec] = [
           Field("threshold", "Warn below quality", "percent", 0.9, 0.5, 1.0, 0.01),
           Field("always", "Always show", "bool", False),
       ]),
-    W("perf", "Performance", "System", "LTH Overlays' own CPU and RAM use and iRacing FPS.",
+    W("perf", "Performance", "System", "Whole PC CPU, RAM and GPU load, iRacing FPS and what LTH Overlays itself uses.",
       "lth_overlays.widgets.engineer", "PerfWidget", "cpu",
-      {"x": 24, "y": 70, "width": 230, "height": None}, rate=10, has_header=False, fields=[]),
+      {"x": 24, "y": 70, "width": 250, "height": None}, rate=10, has_header=False, fields=[
+          Field("show_system", "PC CPU and RAM", "bool", True, help="Whole computer, like Task Manager"),
+          Field("show_gpu", "GPU load and video memory", "bool", True),
+          Field("show_fps", "iRacing FPS", "bool", True),
+          Field("show_lth", "LTH Overlays CPU and RAM", "bool", True),
+          Field("show_engine", "Timing engine cost", "bool", False),
+          Field("bars", "Bars", "bool", True, group="Look", help="Small load bars next to the numbers"),
+      ]),
 ]
 
 BY_NAME = {w.name: w for w in WIDGETS}
@@ -509,3 +625,57 @@ def defaults_for(spec: WidgetSpec) -> dict:
 
 
 DEFAULT_WIDGETS = {w.name: defaults_for(w) for w in WIDGETS}
+
+
+# ---------------------------------------------------------------- kopijos
+# Bet kurį valdiklį galima nukopijuoti (pvz. dvi Flags plytelės skirtingose ekrano vietose).
+NOT_COPYABLE = {"chat", "cover", "perf", "connection"}
+
+
+def copy_name(base: str, n: int) -> str:
+    return f"{base}__{n}"
+
+
+def add_copy(base: str, name: str | None = None) -> WidgetSpec:
+    """Užregistruoja kopiją (idempotentiška). Grąžina jos aprašą."""
+    if name and name in BY_NAME:
+        return BY_NAME[name]
+    src = BY_NAME[base]
+    while src.base:
+        src = BY_NAME[src.base]
+    if name is None:
+        n = 2
+        while copy_name(src.name, n) in BY_NAME:
+            n += 1
+        name = copy_name(src.name, n)
+    n = name.rsplit("__", 1)[-1]
+    geo = dict(src.geometry)
+    geo["x"] = int(geo.get("x", 0)) + (40 if int(geo.get("x", 0)) >= 0 else -40)
+    geo["y"] = int(geo.get("y", 0)) + (40 if int(geo.get("y", 0)) >= 0 else -40)
+    spec = WidgetSpec(name, f"{src.title} {n}", src.category, src.description, src.module, src.cls, src.icon, geo,
+                      visible=False, fields=src.fields, rate=src.rate, needs_inputs=src.needs_inputs,
+                      has_header=src.has_header, base=src.name)
+    WIDGETS.append(spec)
+    BY_NAME[name] = spec
+    DEFAULT_WIDGETS[name] = defaults_for(spec)
+    return spec
+
+
+def remove_copy(name: str):
+    spec = BY_NAME.get(name)
+    if spec is None or not spec.base:
+        return
+    WIDGETS.remove(spec)
+    BY_NAME.pop(name, None)
+    DEFAULT_WIDGETS.pop(name, None)
+
+
+def ordered_specs() -> list:
+    """Valdikliai sąrašams: kiekviena kopija iškart po savo originalo."""
+    out = []
+    for w in WIDGETS:
+        if w.base:
+            continue
+        out.append(w)
+        out.extend(c for c in WIDGETS if c.base == w.name)
+    return out

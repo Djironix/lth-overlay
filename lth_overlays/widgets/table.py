@@ -14,7 +14,7 @@ import time
 from PySide6.QtCore import QPointF, QRectF, Qt
 from PySide6.QtGui import QColor, QPainter, QPen, QPolygonF
 
-from ..flags import draw_flag
+from ..flags import draw_flag, draw_flag_styled
 from ..theme import fmt_clock, fmt_lap
 from ..window import OverlayWidget
 
@@ -29,6 +29,10 @@ _DRIVER_BLUE = 0x00000020
 _DRIVER_BLACK = 0x00010000
 _DRIVER_REPAIR = 0x00100000
 _DRIVER_DQ = 0x00020000
+
+
+# būsenos tekstas -> lenktynių vėliava (piešiama kaip mažas paveikslėlis vietoj BLK / REP ...)
+FLAG_ICONS = {"BLK": "black", "REP": "repair", "DQ": "disqualify", "BLUE": "blue"}
 
 
 class Cell(tuple):
@@ -62,7 +66,7 @@ class TableWidget(OverlayWidget):
     WIDTHS = {}
     NAME_MIN_EM = 6.5  # vardo stulpelis ne siauresnis (≈ "J. SURNAME")
 
-    COLLAPSIBLE = ("status", "catch", "tire", "change", "flag", "irchange")  # tušti stulpeliai neužima vietos
+    COLLAPSIBLE = ("status", "catch", "tire", "change", "flag", "irchange", "laps")  # tušti stulpeliai neužima vietos
 
     def collapse_empty(self, cols: list, rows) -> list:
         """Stulpeliai, kuriuose visose eilutėse tuščia (pvz. niekas neboksuose), paslepiami."""
@@ -131,6 +135,21 @@ class TableWidget(OverlayWidget):
             return Cell(key, txt, fg=contrast(r.lic_color), bg=("rgb", r.lic_color), align=CENTER, font="tiny")
         return Cell(key, txt, fg="dim", align=CENTER, font="small")
 
+    IR_TIERS = ((5000, (180, 120, 255)), (4000, (236, 190, 88)), (3000, (92, 214, 122)), (2000, (104, 172, 255)),
+                (1500, (150, 160, 175)), (0, (110, 116, 128)))
+
+    def irating_cell(self, key, r):
+        """iRating: aiškus blokelis (spalva pagal lygį) arba paprastas tekstas."""
+        from .standings import irating_text
+        if not r.irating:
+            return Cell(key, "", align=CENTER)
+        txt = irating_text(r.irating)
+        if self.cfg.get("irating_style", "badge") == "text":
+            return Cell(key, txt, fg="dim", align=RIGHT, font="small")
+        rgb = next(c for lim, c in self.IR_TIERS if r.irating >= lim)
+        v = (rgb[0] << 16) | (rgb[1] << 8) | rgb[2]
+        return Cell(key, txt, fg=contrast(v), bg=("rgb", v), align=CENTER, font="tiny")
+
     def irchange_cell(self, key, r, snap):
         d = snap.ir_change.get(r.idx) if snap is not None else None
         if d is None:
@@ -167,6 +186,112 @@ class TableWidget(OverlayWidget):
             return Cell(key, "BLUE", fg="white", bg="blue", align=CENTER, font="tiny")
         return Cell(key, "", align=CENTER)
 
+    @staticmethod
+    def delta_cell(rr, key="delta"):
+        """Gap'o pokytis per ratą (artėjam / tolstam) - tas pats Relative ir Standings."""
+        if rr is None or rr.is_me or rr.delta is None:
+            return Cell(key, "", align=RIGHT)
+        d = rr.delta
+        pre = "" if rr.delta_exact else "~"
+        ahead = rr.gap > 0  # priekyje: gap mažėja = tu greitesnis (gerai); už tavęs: mažėja = vejasi (blogai)
+        if d < -0.05:
+            return Cell(key, f"▼{pre}{-d:.1f}", fg="good" if ahead else "bad", align=RIGHT, font="small")
+        if d > 0.05:
+            return Cell(key, f"▲{pre}{d:.1f}", fg="bad" if ahead else "good", align=RIGHT, font="small")
+        return Cell(key, "= 0.0", fg="dim", align=RIGHT, font="small")
+
+    def pit_width(self) -> float:
+        return {"since": 2.4, "stop": 5.4, "both": 6.6}.get(self.cfg.get("pit_style", "stop"), 5.4)
+
+    def pit_cell(self, key, r, race: bool):
+        """Boksai: būsenos ženkliukas, o kai trasoje - paskutinis sustojimas (ratas ir trukmė) ar ratai nuo jo."""
+        st = self.status_cell(key, r, race)
+        if st[1] and st[1] != "PIT":
+            return st
+        if r.status == "pit":
+            live = f"PIT {r.pit_live:.0f}s" if r.pit_live >= 1 else "PIT"
+            return Cell(key, live, fg="white", bg="pit", align=CENTER, font="tiny")
+        mode = self.cfg.get("pit_style", "stop")
+        ls = r.last_stop
+        since = f"{r.laps_since_pit}" if (race and r.laps_since_pit is not None) else ""
+        if mode == "since" or ls is None:
+            return Cell(key, since, fg="dim", align=CENTER, font="small")
+        stop = f"L{ls[0]} {ls[1]:.0f}s"
+        txt = stop if mode == "stop" else f"{stop} +{since}" if since else stop
+        return Cell(key, txt, fg="dim", align=CENTER, font="small")
+
+    # ---------------- paskutiniai ratai (Last 5 / 10 laps) ----------------
+    LAPS_EM = {"squares": 0.95, "delta": 2.3, "times": 3.4}
+
+    def laps_width(self) -> float:
+        n = int(self.cfg.get("laps_n", 5) or 5)
+        return n * self.LAPS_EM.get(self.cfg.get("laps_style", "delta"), 2.3)
+
+    def laps_ref(self, snap, r) -> float | None:
+        """Su kuo lyginam: mano tempas (5 švarių ratų mediana), mano paskutinis, jo geriausias ar jo vidurkis."""
+        mode = self.cfg.get("laps_ref", "my_pace")
+        p = snap.player if snap is not None else None
+        if mode == "my_last":
+            return p.last_lap if p is not None and p.last_lap > 0 else None
+        if mode == "their_best":
+            return r.best_lap if r.best_lap > 0 else None
+        if mode == "their_avg":
+            clean = sorted(t for t, pit in r.recent if not pit and t > 0)
+            return clean[len(clean) // 2] if clean else None
+        if p is None:
+            return None
+        if p.pace_lap:
+            return p.pace_lap
+        return p.best_lap if p.best_lap > 0 else None
+
+    def laps_cell(self, key, r, snap):
+        """Ląstelė su N paskutinių ratų: ((tekstas, spalva, ryškumas 0..1), ...), seniausias kairėje.
+        Žalia - greitesnis už palyginimą, raudona - lėtesnis, pilka - boksų ratas ar ±0.1 s."""
+        n = int(self.cfg.get("laps_n", 5) or 5)
+        style = self.cfg.get("laps_style", "delta")
+        ref = self.laps_ref(snap, r)
+        laps = list(r.recent[-n:])
+        out = []
+        for t, pit in laps:
+            d = (t - ref) if ref else None
+            if pit:
+                col, k = "pit", 0.5
+            elif d is None or abs(d) < 0.1:
+                col, k = "dim", 0.35
+            else:
+                col, k = ("good" if d < 0 else "bad"), min(1.0, 0.35 + abs(d) / 1.5 * 0.65)
+            if style == "times":
+                m, sec = divmod(t, 60.0)
+                txt = f"{int(m)}:{sec:04.1f}" if m else f"{sec:.1f}"
+            elif style == "delta":
+                txt = "PIT" if pit else ("–" if d is None else f"{d:+.1f}")
+            else:
+                txt = ""
+            out.append((txt, col, round(k, 2)))
+        out = [("", None, 0.0)] * (n - len(out)) + out  # trūkstami ratai - tuščios vietos kairėje
+        return Cell(key, tuple(out) if laps else "", align=RIGHT, font="tiny")
+
+    def _paint_laps(self, p, rect, segs, rh):
+        n = len(segs)
+        if not n:
+            return
+        sw = rect.width() / n
+        squares = self.cfg.get("laps_style", "delta") == "squares"
+        for i, (txt, col, k) in enumerate(segs):
+            if col is None:
+                continue
+            c = QColor(self._color(col))
+            cell = QRectF(rect.x() + i * sw, rect.y(), sw, rh)
+            if squares:
+                c.setAlphaF(k)
+                sq = min(sw - 2, rh * 0.5)
+                p.setPen(Qt.PenStyle.NoPen)
+                p.setBrush(c)
+                p.drawRoundedRect(QRectF(cell.center().x() - sq / 2, cell.center().y() - sq / 2, sq, sq), 2, 2)
+            else:
+                p.setPen(c)
+                self.draw_text(p, cell.adjusted(1, 0, -1, 0), txt, "tiny", CENTER)
+
     # ---------------- informacijos juostos ----------------
     def info_values(self, snap, keys) -> tuple:
         """[(pavadinimas, reikšmė)] - antraštei ir apatinei juostai."""
@@ -195,6 +320,11 @@ class TableWidget(OverlayWidget):
                     label, v = "SOF", f"{sof / 1000:.1f}k" if sof >= 1000 else str(sof)
             elif k == "lap" and me is not None:
                 label, v = "Lap", str(me.laps + 1)
+                left = getattr(p, "race_laps_left", None) if (p is not None and race) else None
+                if left is not None and math.isfinite(left):
+                    total = me.laps + float(getattr(p, "lap_pct", 0.0) or 0.0) + float(left)
+                    tt = f"{round(total)}" if abs(total - round(total)) < 0.05 else f"{total:.1f}"
+                    v = f"{me.laps + 1}/{tt}"  # pvz. 12/23.4 - kiek ratų iki finišo (laiko lenktynėse - įvertis)
             elif k == "track_temp" and w is not None and w.valid and math.isfinite(w.track_temp):
                 label, v = "Track", f"{w.track_temp:.0f}°"
             elif k == "air_temp" and w is not None and w.valid and math.isfinite(w.air_temp):
@@ -241,7 +371,8 @@ class TableWidget(OverlayWidget):
 
     COL_LABELS = {"pos": "P", "change": "+/-", "number": "#", "name": "DRIVER", "brand": "CAR", "carname": "CAR",
                   "pit": "PIT", "gap": "GAP", "interval": "INT", "last": "LAST", "best": "BEST", "start": "ST",
-                  "license": "LIC", "irating": "iR", "irchange": "+iR", "tire": "TYRE", "delta": "DELTA", "catch": "CATCH"}
+                  "license": "LIC", "irating": "iR", "irchange": "+iR", "tire": "TYRE", "delta": "DELTA", "catch": "CATCH",
+                  "laps": "LAST LAPS", "status": "", "pitstops": "STOPS", "lapsdone": "LAPS", "classpos": "CL"}
 
     def colhead_h(self) -> int:
         return round(self.fonts.em_small * 1.25) if self.cfg.get("column_header") else 0
@@ -339,8 +470,28 @@ class TableWidget(OverlayWidget):
                     continue
                 if key == "flag":
                     if text:
-                        draw_flag(p, rect.adjusted(1, rh * 0.24, -1, -rh * 0.24), text, 1.5)
+                        st, fr = self.cfg.get("flag_style", "3d"), self.cfg.get("flag_frame", "none")
+                        draw_flag_styled(p, rect.adjusted(1, rh * 0.22, -1, -rh * 0.22), text, st, fr,
+                                         self.pal.accent, 1.5, self.devicePixelRatioF())
                     continue
+                if key == "laps":
+                    if text:
+                        self._paint_laps(p, rect, text, rh)
+                    continue
+                if key in ("status", "pit") and text in FLAG_ICONS and self.cfg.get("status_icons", True):
+                    from ..flags import paint_race_flag
+                    fh = rh * 0.56
+                    fw = min(w - 2, fh * 1.4)
+                    fr = QRectF(x + (w - fw) / 2, y + (rh - fh) / 2, fw, fh)
+                    paint_race_flag(p, fr, FLAG_ICONS[text], fh * 0.08, 1.5)
+                    continue
+                if key == "brand" and text and self.cfg.get("brand_style", "badge") == "logo":
+                    from ..logos import STORE
+                    pm = STORE.pixmap(text, w - 2, rh * 0.68, self.devicePixelRatioF())
+                    if pm is not None:
+                        pw, ph = pm.width() / pm.devicePixelRatio(), pm.height() / pm.devicePixelRatio()
+                        p.drawPixmap(QPointF(x + (w - pw) / 2, y + (rh - ph) / 2), pm)
+                        continue
                 if bg is not None and text:
                     bw = min(w, self.text_width(text, font) + rh * 0.42)
                     bx = x + (w - bw) / 2 if align == CENTER else (x + w - bw if align == RIGHT else x)
@@ -391,7 +542,14 @@ class TableWidget(OverlayWidget):
             return 4.0
         hh = self.paint_header(p, title, "")
         if info:
-            self._paint_info(p, QRectF(r.width() * 0.25, 0, r.width() * 0.75 - 10, hh), info, RIGHT)
+            al = self.cfg.get("header_align", "right")
+            tw = self.text_width(title, "tiny") + self.fonts.em_small * 2.2
+            if al == "left":
+                self._paint_info(p, QRectF(tw, 0, r.width() - tw - 10, hh), info, LEFT)
+            elif al == "center":
+                self._paint_info(p, QRectF(tw, 0, r.width() - 2 * tw, hh), info, CENTER)
+            else:
+                self._paint_info(p, QRectF(r.width() * 0.25, 0, r.width() * 0.75 - 10, hh), info, RIGHT)
         return hh + 2
 
     def _paint_info(self, p, rect: QRectF, info, align=RIGHT):
@@ -406,7 +564,7 @@ class TableWidget(OverlayWidget):
             parts.pop()
             widths.pop()
             total = sum(widths) + gap * max(0, len(parts) - 1)
-        x = rect.right() - total if align == RIGHT else rect.x()
+        x = rect.right() - total if align == RIGHT else (rect.center().x() - total / 2 if align == CENTER else rect.x())
         for (label, value), wv in zip(parts, widths):
             if label:
                 p.setPen(self.pal.dim)
@@ -425,7 +583,8 @@ class TableWidget(OverlayWidget):
         fh = self.footer_h()
         r = QRectF(0, y + 2, self.width(), fh)
         p.fillRect(r, self.pal.header)
-        self._paint_info(p, r.adjusted(10, 0, -10, 0), info, LEFT)
+        al = {"left": LEFT, "center": CENTER, "right": RIGHT}.get(self.cfg.get("footer_align", "left"), LEFT)
+        self._paint_info(p, r.adjusted(10, 0, -10, 0), info, al)
 
     def paint_flag_border(self, p: QPainter):
         col = getattr(self, "_border", None)

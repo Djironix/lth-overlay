@@ -14,6 +14,7 @@ Paleidimas:
 from __future__ import annotations
 
 import argparse
+import copy
 import os
 import sys
 import threading
@@ -250,6 +251,7 @@ class OverlayApp(QObject):
         self._preview = None
         self._tick = 0
         self._proc = win32.ProcStats()
+        self._sys = win32.SystemStats()
         self._hotkeys = {}
         self.widgets = {}
         for spec in WIDGETS:
@@ -262,15 +264,15 @@ class OverlayApp(QObject):
         from .sessions import SessionStore
         self.sessions = SessionStore(os.path.join(os.path.dirname(config.path) if getattr(config, "path", None)
                                                   else app_dir(), "sessions"))
-        from .setups import SetupLibrary
-        base_dir = os.path.dirname(config.path) if getattr(config, "path", None) else app_dir()
-        self.setups = SetupLibrary(os.path.join(base_dir, "setups"))
         self.notifications = []  # [(laikas, tekstas)] - naujausi gale
-        self._setups_car = None
         from .pb import PersonalBests
         self.pbs = PersonalBests(os.path.join(os.path.dirname(config.path), "pb.json")
                                  if getattr(config, "path", None) else None)
         self.obs = ObsServer(self)
+        from .updater import Updater
+        self.updater = Updater(self)
+        self._bg = _BgWorker()
+        win32.set_low_priority(bool(config.data.get("low_priority", True)))
 
     def _install_gc(self):
         """Šiukšlių surinkimas tik UI gijoje. Automatinis Python GC gali pasileisti bet kurioje gijoje
@@ -280,9 +282,16 @@ class OverlayApp(QObject):
         gc.disable()
         self._gc_n = 0
 
+        self._gc_time = 0.0
+
         def collect():
             self._gc_n += 1
+            t0 = time.perf_counter()
             gc.collect(2 if self._gc_n % 60 == 0 else (1 if self._gc_n % 10 == 0 else 0))
+            self._gc_time += time.perf_counter() - t0
+            if self._gc_n == 20:  # po paleidimo: ilgai gyvenantys objektai „užšaldomi" - pilnas GC tampa pigus
+                gc.collect()
+                gc.freeze()
         self._gc_timer = QTimer(self)
         self._gc_timer.setTimerType(Qt.TimerType.CoarseTimer)
         self._gc_timer.timeout.connect(collect)
@@ -376,6 +385,45 @@ class OverlayApp(QObject):
         """Valdiklis nutemptas / pakeistas dydis ekrane - Control Center atnaujina formą."""
         if self.control is not None:
             self.control.geometry_changed(name)
+
+    # ---- valdiklių kopijos ----
+    def add_copy(self, base: str) -> str:
+        """Nauja valdiklio kopija (savi nustatymai ir vieta). Grąžina jos pavadinimą."""
+        from .registry import BY_NAME, add_copy
+        src = self.config.widget(base)
+        spec = add_copy(base)
+        self.config.data.setdefault("copies", []).append({"name": spec.name, "base": spec.base})
+        cfg = self.config.widget(spec.name)
+        for k, v in src.items():  # pradžiai - tie patys nustatymai kaip originalo, tik pastumta
+            if k not in ("x", "y", "visible"):
+                cfg[k] = copy.deepcopy(v)
+        cfg["x"] = int(src.get("x", 0) or 0) + 40
+        cfg["y"] = int(src.get("y", 0) or 0) + 40
+        cfg["visible"] = True
+        w = BY_NAME[spec.name].load()(self)
+        self.widgets[spec.name] = w
+        self.widget_changed(spec.name)
+        self.save_config_soon()
+        return spec.name
+
+    def remove_copy(self, name: str):
+        from .registry import BY_NAME, remove_copy
+        spec = BY_NAME.get(name)
+        if spec is None or not spec.base:
+            return
+        w = self.widgets.pop(name, None)
+        if w is not None:
+            w.hide()
+            w.deleteLater()
+        ow = self.obs._inst.pop(name, None) if hasattr(self.obs, "_inst") else None
+        if ow is not None:
+            ow.deleteLater()
+        remove_copy(name)
+        self.config.data["copies"] = [c for c in self.config.data.get("copies", []) if c.get("name") != name]
+        for p in self.config.data["profiles"].values():
+            p.get("widgets", {}).pop(name, None)
+        self.save_config_soon()
+        self._update_inputs_flag()
 
     def open_settings(self, name=None):
         self.open_control_center(page="widget" if name else None, widget=name)
@@ -481,20 +529,6 @@ class OverlayApp(QObject):
         if self.control is not None and self.control.isVisible():
             self.control.toast(text)
 
-    def _auto_install_setups(self, snap):
-        car = snap.car_key
-        st = self.config.data.get("setups") or {}
-        if not car or car == self._setups_car or not st.get("auto", False):
-            return
-        self._setups_car = car
-        try:
-            n = self.setups.install(car)
-        except OSError:
-            n = 0
-        if n:
-            me = next((r for r in snap.cars if r.is_me), None)
-            self.notify(f"{n} LTH setup{'s' if n != 1 else ''} installed for {me.car_short if me else car}")
-
     def next_profile(self):
         keys = list(self.config.data.get("profiles") or {})
         if len(keys) < 2:
@@ -535,9 +569,18 @@ class OverlayApp(QObject):
     def _on_tick(self):
         self._tick += 1
         snap = self.engine.latest
+        if self._tick % 10 == 3:
+            self.updater.tick()
         if self._tick % 10 == 0:
             cpu, ram = self._proc.sample()
             self.perf.update(cpu=cpu, ram=ram, engine_us=self.engine.update_us, fps=self.engine.fps)
+            # viso kompiuterio apkrova - tik kai ją kas nors rodo (Performance valdiklis)
+            pw = self.widgets.get("perf")
+            if (pw is not None and pw.isVisible()) or (self.control is not None and self.control.isVisible()):
+                pc = self.config.widget("perf")
+                self.perf.update(sys_cpu=self._sys.cpu(), sys_ram=self._sys.ram(),
+                                 gpu=self._sys.gpu() if pc.get("show_gpu", True) else None)
+            self._spike_check(cpu)
             self.perf_hist.append((cpu, ram, self.engine.fps))
             del self.perf_hist[:-120]
             if self.control is not None and self.control.isVisible():
@@ -553,16 +596,22 @@ class OverlayApp(QObject):
                 if self.pbs.observe(snap) and self.pbs.new_pb_t:
                     from lth_timing.telemetry import fmt
                     self.notify(f"New personal best {fmt(snap.player.best_lap)}  ·  {snap.track_name}")
-                self._auto_install_setups(snap)
-                if (self.config.data.get("telemetry") or {}).get("auto_save_best", True):
-                    from .control.telemetry_page import autosave_best
-                    tm = getattr(self.engine.timing, "trackmap", None)
-                    autosave_best(getattr(self.engine.timing, "recorder", None), self.__dict__.setdefault("_tel_state", {}),
-                                  tm.points if tm is not None else None)
-                if (self.config.data.get("telemetry") or {}).get("save_sessions", True):
-                    tm = getattr(self.engine.timing, "trackmap", None)
-                    self.sessions.observe(getattr(self.engine.timing, "recorder", None),
-                                          tm.points if tm is not None else None)
+                # rato failų rašymas (suspaudimas, json) - foninėje gijoje, kad nestabdytų piešimo
+                tel = self.config.data.get("telemetry") or {}
+                rec = getattr(self.engine.timing, "recorder", None)
+                tm = getattr(self.engine.timing, "trackmap", None)
+                pts = tm.points if tm is not None else None
+                if rec is not None and rec.version != getattr(self, "_bg_rec_ver", None):
+                    self._bg_rec_ver = rec.version
+                    state = self.__dict__.setdefault("_tel_state", {})
+
+                    def save_laps(rec=rec, pts=pts, tel=dict(tel), state=state):
+                        if tel.get("auto_save_best", True):
+                            from .control.telemetry_page import autosave_best
+                            autosave_best(rec, state, pts)
+                        if tel.get("save_sessions", True):
+                            self.sessions.observe(rec, pts)
+                    self._bg.submit("laps", save_laps)
             self._auto_profile(snap)
             self._apply_class_colors(snap)
         self._refresh_visibility(snap=snap)
@@ -571,6 +620,35 @@ class OverlayApp(QObject):
                 continue
             if self._tick % RATES.get(name, 1) == 0:
                 w.push(snap)
+
+    def _spike_check(self, cpu: float):
+        """CPU šuolių žurnalas: kai apkrova šokteli, užrašom, kas tą sekundę dirbo
+        (piešimas pagal valdiklį, variklis, GC, foninis rato išsaugojimas). Failas: perf_spikes.log."""
+        import gc as _gc
+        costs = {n: w.cost_s for n, w in self.widgets.items()}
+        cur = (costs, float(getattr(self.engine, "cpu_s", 0.0)), float(getattr(self, "_gc_time", 0.0)),
+               float(self._bg.busy_s))
+        prev = getattr(self, "_spike_prev", None)
+        self._spike_prev = cur
+        if prev is None or len(self.perf_hist) < 10:
+            return
+        usual = sorted(x[0] for x in self.perf_hist[-60:])[len(self.perf_hist[-60:]) // 2]
+        if cpu < max(12.0, usual * 2.5):
+            return
+        dw = sorted(((n, costs[n] - prev[0].get(n, costs[n])) for n in costs), key=lambda kv: -kv[1])[:4]
+        parts = [f"engine {(cur[1] - prev[1]) * 1000:.0f} ms", f"gc {(cur[2] - prev[2]) * 1000:.0f} ms",
+                 f"lap saving {(cur[3] - prev[3]) * 1000:.0f} ms",
+                 "widgets " + ", ".join(f"{n} {v * 1000:.0f} ms" for n, v in dw if v > 0.0005)]
+        line = (f"{time.strftime('%Y-%m-%d %H:%M:%S')}  CPU {cpu:.0f}% (usual {usual:.0f}%)  |  " + "  |  ".join(parts)
+                + f"  |  gc gen counts {_gc.get_count()}\n")
+        path = os.path.join(app_dir(), "perf_spikes.log")
+        try:
+            if os.path.exists(path) and os.path.getsize(path) > 300_000:
+                os.replace(path, path + ".old")
+            with open(path, "a", encoding="utf-8") as fh:
+                fh.write(line)
+        except OSError:
+            pass
 
     def _auto_profile(self, snap):
         cfg = self.config.data
@@ -640,6 +718,7 @@ class OverlayApp(QObject):
             eng = TimingEngine()
             eng.player.inputs_enabled = True
             eng.set_session(demo.session)
+            _demo_map(eng)
             for _ in range(60 * 200):
                 eng.update(demo.wait_frame())
             snap = eng.snapshot()
@@ -803,6 +882,46 @@ class OverlayApp(QObject):
     _set_profile = set_profile
 
 
+class _BgWorker:
+    """Viena foninė gija failų darbams (rato išsaugojimas). Darbai su tuo pačiu raktu nesikaupia.
+    Automatinis Python GC išjungtas (_install_gc), todėl šioje gijoje Qt objektai nesunaikinami."""
+
+    def __init__(self):
+        import queue
+        self._q = queue.Queue()
+        self._pending = set()
+        self.busy_s = 0.0
+        self._th = threading.Thread(target=self._run, daemon=True, name="lth-background")
+        self._th.start()
+
+    def submit(self, key, fn):
+        if key in self._pending:
+            return
+        self._pending.add(key)
+        self._q.put((key, fn))
+
+    def _run(self):
+        while True:
+            key, fn = self._q.get()
+            t0 = time.thread_time()
+            try:
+                fn()
+            except Exception:  # noqa: BLE001
+                import traceback
+                _ui_log("background job failed\n" + traceback.format_exc())
+            finally:
+                self._pending.discard(key)
+                self.busy_s += time.thread_time() - t0
+
+
+def _demo_map(eng):
+    """Peržiūroje / demo - tikras Spa kontūras vietoj apskritimo."""
+    from lth_timing.trackmap import bundled
+    pts = bundled("spa")
+    if pts is not None:
+        eng.trackmap.points = pts
+
+
 def make_icon() -> QIcon:
     from .brand import app_icon
     return app_icon()
@@ -816,6 +935,7 @@ def render_screenshot(oapp: OverlayApp, path: str, sim_seconds: float = 300):
     eng = TimingEngine()
     eng.player.inputs_enabled = True
     eng.set_session(demo.session)
+    _demo_map(eng)
     ing = Engineer()
     snap = None
     for i in range(int(sim_seconds * 60)):
@@ -871,6 +991,7 @@ def main(argv=None):
     ap.add_argument("--edit", action="store_true", help="start in edit mode")
     ap.add_argument("--autostart", action="store_true", help="started with Windows: stay in the tray")
     ap.add_argument("--control", action="store_true", help="open the Control Center")
+    ap.add_argument("--restarted", action="store_true", help=argparse.SUPPRESS)
     args = ap.parse_args(argv)
 
     QGuiApplication.setHighDpiScaleFactorRoundingPolicy(Qt.HighDpiScaleFactorRoundingPolicy.PassThrough)
@@ -880,6 +1001,12 @@ def main(argv=None):
 
     if not args.screenshot:
         lock = win32.single_instance("Local\\LTHOverlaysSingleInstance")
+        if lock is None and args.restarted:  # po atnaujinimo: palaukiam, kol senas procesas užsidarys
+            for _ in range(60):
+                time.sleep(0.25)
+                lock = win32.single_instance("Local\\LTHOverlaysSingleInstance")
+                if lock is not None:
+                    break
         if lock is None:
             if args.autostart or not win32.request_show_running_instance():
                 if not args.autostart:

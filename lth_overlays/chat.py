@@ -213,6 +213,24 @@ class ChatHub:
         self._threads = {}
         self._stop = {}
         self._touch = 0.0
+        self.twitch_live = None  # ar Twitch transliacija vyksta (ne tik chat ryšys); None - nežinoma
+        self._live_thread = None
+
+    def stream_live(self) -> bool:
+        """Ar kuri nors transliacija tikrai vyksta: YouTube - pagal live vaizdo įrašą,
+        Twitch - pagal transliacijos būseną (decapi.me/twitch/uptime, tikrinama kas minutę)."""
+        st = dict(self.status)
+        return st.get("y") == "live" or bool(self.twitch_live)
+
+    def _twitch_live_loop(self, channel, ev):
+        while self._alive(ev):
+            try:
+                txt = self._http(f"https://decapi.me/twitch/uptime/{channel}", timeout=10).strip().lower()
+                self.twitch_live = bool(txt) and "offline" not in txt and "error" not in txt and \
+                    "not found" not in txt
+            except Exception:  # noqa: BLE001 - nežinom: paliekam kaip buvo
+                pass
+            ev.wait(60)
 
     # ---- valdikliams (UI gija) ----
     def configure(self, twitch: str, youtube: str):
@@ -224,6 +242,8 @@ class ChatHub:
             ev.set()
         self._threads.clear()
         self._stop.clear()
+        self.twitch_live = None
+        self._live_thread = None
         with self._lock:
             self.status = {"t": "", "y": ""}
             self.messages.clear()
@@ -232,6 +252,12 @@ class ChatHub:
     def touch(self):
         self._touch = time.monotonic()
         tw, yt = self._cfg
+        if tw and (self._live_thread is None or not self._live_thread.is_alive()):
+            ev = threading.Event()
+            self._stop["tl"] = ev
+            self._live_thread = threading.Thread(target=self._twitch_live_loop, args=(tw, ev),
+                                                 name="lth-chat-twitch-live", daemon=True)
+            self._live_thread.start()
         for plat, val, target in (("t", tw, self._run_twitch), ("y", yt, self._run_youtube)):
             th = self._threads.get(plat)
             if val and (th is None or not th.is_alive()):

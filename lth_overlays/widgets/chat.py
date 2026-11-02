@@ -38,6 +38,24 @@ class ChatWidget(PanelWidget):
     def desired_height(self) -> int:
         return int(self.fonts.em_base * 14)
 
+    def _live(self) -> bool:
+        hub = self._hub()
+        if hub is None:
+            return False
+        return hub.stream_live()
+
+    def wants_visible(self, snap) -> bool:
+        if not super().wants_visible(snap):
+            return False
+        if self.editing or not self.cfg.get("hide_offline", True):
+            return True
+        hub = self._hub()
+        if hub is not None:  # ryšys palaikomas ir kai valdiklis paslėptas - kad pamatytų, kada stream'as prasideda
+            c = self.cfg
+            hub.configure(c.get("twitch", ""), c.get("youtube", ""))
+            hub.touch()
+        return self._live()
+
     def _hub(self):
         return getattr(self.ctx, "chat", None)
 
@@ -51,6 +69,8 @@ class ChatWidget(PanelWidget):
             hub.configure(c.get("twitch", ""), c.get("youtube", ""))
             hub.touch()
             seq, msgs, status = hub.snapshot(n)
+            if c.get("hide_offline", True) and not hub.stream_live():
+                msgs = []  # stream'as nevyksta - senų žinučių nerodom
         demo = not msgs and (self.editing or (self.preview_mode and not self.obs_mode) or self.obs_demo)
         if demo:
             msgs = demo_messages()

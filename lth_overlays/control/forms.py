@@ -109,11 +109,52 @@ class WidgetForm(QWidget):
             b.changed.connect(lambda v, k=f.key: self._set(k, v))
             self._controls[f.key] = b
             return SettingRow(f.label, b, f.help)
+        if f.kind == "image":
+            return self._image_control(f, val)
         # text
         e = QLineEdit(str(val or ""))
         e.setMinimumWidth(240)
         e.editingFinished.connect(lambda k=f.key, e=e: self._set(k, e.text()))
         return SettingRow(f.label, e, f.help)
+
+    def _image_control(self, f, val):
+        """Paveikslėlis (pvz. savo vairo PNG): nukopijuojamas į programos aplanką, kad neprapultų."""
+        import os
+        import shutil
+        from PySide6.QtWidgets import QFileDialog
+        from ..config import app_dir
+        name = label(os.path.basename(val) if val else "Built-in", "muted")
+        pick = button("Choose image...", "ghost", "image")
+        clear = button("", "ghost", "reset", "Back to the built-in one")
+        clear.setFixedWidth(34)
+
+        def choose():
+            path, _ = QFileDialog.getOpenFileName(self, f.label, "", "Images (*.png *.webp *.jpg *.jpeg)")
+            if not path:
+                return
+            folder = os.path.join(app_dir(), "images")
+            os.makedirs(folder, exist_ok=True)
+            dst = os.path.join(folder, f"{self.name}_{f.key}{os.path.splitext(path)[1].lower()}")
+            try:
+                shutil.copyfile(path, dst)
+            except OSError:
+                return
+            name.setText(os.path.basename(path))
+            self._set(f.key, dst)
+
+        def reset():
+            name.setText("Built-in")
+            self._set(f.key, "")
+        pick.clicked.connect(choose)
+        clear.clicked.connect(reset)
+        box = QWidget()
+        h = QHBoxLayout(box)
+        h.setContentsMargins(0, 0, 0, 0)
+        h.setSpacing(8)
+        h.addWidget(name)
+        h.addWidget(pick)
+        h.addWidget(clear)
+        return SettingRow(f.label, box, f.help)
 
     # ---------------------------------------------------------------- vieta ir dydis
     def _ensure_size(self):

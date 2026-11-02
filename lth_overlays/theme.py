@@ -91,6 +91,86 @@ THEMES = {
         "good": (90, 230, 140), "bad": (255, 110, 110), "purple": (200, 130, 255), "blue": (120, 180, 255),
         "red": (255, 110, 110), "pit": (150, 150, 150), "yellow": (255, 220, 90), "border": (0, 0, 0, 0),
     },
+    "velocity": {
+        "name": "LTH Velocity", "font": "russo", "header_style": "tab", "shape": "slant",
+        "bg": (10, 10, 12), "bg_alpha": 0.82, "row_alt": (255, 255, 255, 12), "header": (6, 6, 8),
+        "text": (248, 246, 240), "dim": (165, 158, 142), "accent": (240, 192, 80), "me_bg": (240, 192, 80, 50),
+        "good": (92, 214, 122), "bad": (255, 88, 88), "purple": (190, 120, 255), "blue": (104, 172, 255),
+        "red": (255, 88, 88), "pit": (130, 128, 122), "yellow": (251, 208, 105), "border": (0, 0, 0, 0),
+        "ink": (12, 10, 4), "shadow": True, "row_k": 1.6, "radius": 0, "lumina": True, "upper_names": True,
+    },
+    "pitwall": {
+        "name": "Pit wall", "font": "barlowsemi", "header_style": "line", "shape": "chamfer",
+        "bg": (9, 16, 28), "bg_alpha": 0.88, "row_alt": (90, 170, 255, 14), "header": (14, 26, 44),
+        "text": (232, 242, 255), "dim": (130, 152, 182), "accent": (0, 200, 255), "me_bg": (0, 200, 255, 40),
+        "good": (60, 230, 150), "bad": (255, 92, 92), "purple": (180, 130, 255), "blue": (80, 170, 255),
+        "red": (255, 92, 92), "pit": (110, 126, 150), "yellow": (255, 210, 70), "border": (0, 0, 0, 0),
+        "ink": (0, 10, 20), "shadow": False, "row_k": 1.6, "radius": 0, "lumina": False, "upper_names": True,
+    },
+    "endurance": {
+        "name": "Endurance", "font": "saira", "header_style": "solid", "shape": "chamfer",
+        "bg": (10, 22, 16), "bg_alpha": 0.86, "row_alt": (255, 255, 255, 10), "header": (232, 196, 40),
+        "text": (238, 244, 236), "dim": (148, 166, 150), "accent": (232, 196, 40), "me_bg": (232, 196, 40, 46),
+        "good": (90, 225, 120), "bad": (255, 96, 86), "purple": (186, 120, 255), "blue": (96, 176, 255),
+        "red": (255, 96, 86), "pit": (120, 136, 124), "yellow": (255, 214, 60), "border": (0, 0, 0, 0),
+        "ink": (16, 14, 0), "shadow": False, "row_k": 1.62, "radius": 0, "lumina": False, "upper_names": True,
+    },
+    "redline": {
+        "name": "Redline", "font": "chakra", "header_style": "tab", "shape": "slant",
+        "bg": (14, 10, 10), "bg_alpha": 0.86, "row_alt": (255, 60, 60, 14), "header": (8, 6, 6),
+        "text": (250, 244, 244), "dim": (170, 150, 150), "accent": (235, 30, 45), "me_bg": (235, 30, 45, 52),
+        "good": (80, 225, 120), "bad": (255, 80, 80), "purple": (190, 120, 255), "blue": (100, 170, 255),
+        "red": (255, 80, 80), "pit": (130, 120, 120), "yellow": (255, 205, 60), "border": (0, 0, 0, 0),
+        "ink": (0, 0, 0), "shadow": True, "row_k": 1.58, "radius": 0, "lumina": True, "upper_names": True,
+    },
+    "ice": {
+        "name": "Ice", "font": "manrope", "header_style": "plain",
+        "bg": (236, 244, 252), "bg_alpha": 0.84, "row_alt": (20, 60, 120, 12), "header": (210, 226, 244),
+        "text": (12, 24, 40), "dim": (84, 104, 130), "accent": (24, 120, 220), "me_bg": (24, 120, 220, 44),
+        "good": (10, 150, 80), "bad": (210, 40, 50), "purple": (120, 60, 210), "blue": (24, 120, 220),
+        "red": (210, 40, 50), "pit": (130, 140, 154), "yellow": (190, 130, 0), "border": (0, 0, 0, 0),
+        "ink": (0, 0, 0), "shadow": False, "row_k": 1.62, "radius": 12, "lumina": False, "upper_names": False,
+    },
+    "nightrace": {
+        "name": "Night race", "font": "oxanium", "header_style": "marker",
+        "bg": (12, 10, 30), "bg_alpha": 0.8, "row_alt": (110, 120, 255, 16), "header": (22, 18, 54),
+        "text": (236, 238, 255), "dim": (150, 150, 200), "accent": (0, 230, 255), "me_bg": (0, 230, 255, 40),
+        "good": (60, 255, 170), "bad": (255, 80, 130), "purple": (200, 120, 255), "blue": (0, 200, 255),
+        "red": (255, 80, 130), "pit": (120, 116, 160), "yellow": (255, 226, 90), "border": (0, 0, 0, 0),
+        "ink": (4, 4, 20), "shadow": True, "row_k": 1.6, "radius": 14, "lumina": True, "upper_names": True,
+    },
+    "carbongold": {
+        "name": "Carbon gold", "font": "titillium", "header_style": "gold", "shape": "chamfer",
+        "bg": (24, 25, 28), "bg_alpha": 0.9, "row_alt": (255, 255, 255, 9), "header": (16, 16, 18),
+        "text": (240, 236, 226), "dim": (156, 150, 136), "accent": (222, 176, 72), "me_bg": (222, 176, 72, 44),
+        "good": (80, 214, 120), "bad": (255, 90, 90), "purple": (186, 110, 255), "blue": (96, 166, 255),
+        "red": (255, 90, 90), "pit": (124, 122, 118), "yellow": (250, 206, 96), "border": (0, 0, 0, 0),
+        "ink": (16, 12, 0), "shadow": False, "row_k": 1.58, "radius": 0, "lumina": False, "upper_names": True,
+    },
+    "tricolore": {
+        "name": "Tricolore", "font": "sairasemi", "header_style": "solid",
+        "bg": (12, 20, 44), "bg_alpha": 0.9, "row_alt": (255, 255, 255, 11), "header": (210, 30, 46),
+        "text": (250, 250, 255), "dim": (156, 168, 200), "accent": (210, 30, 46), "me_bg": (255, 255, 255, 40),
+        "good": (64, 220, 130), "bad": (255, 90, 90), "purple": (186, 120, 255), "blue": (90, 166, 255),
+        "red": (255, 90, 90), "pit": (124, 134, 160), "yellow": (255, 210, 70), "border": (0, 0, 0, 0),
+        "ink": (0, 0, 0), "shadow": False, "row_k": 1.62, "radius": 3, "lumina": False, "upper_names": True,
+    },
+    "data": {
+        "name": "Telemetry", "font": "jetbrains", "header_style": "plain", "shape": "chamfer",
+        "bg": (4, 8, 6), "bg_alpha": 0.86, "row_alt": (80, 255, 140, 10), "header": (8, 20, 12),
+        "text": (200, 255, 214), "dim": (100, 170, 120), "accent": (60, 255, 130), "me_bg": (60, 255, 130, 36),
+        "good": (60, 255, 130), "bad": (255, 90, 80), "purple": (200, 140, 255), "blue": (90, 200, 255),
+        "red": (255, 90, 80), "pit": (90, 130, 100), "yellow": (240, 230, 90), "border": (0, 0, 0, 0),
+        "ink": (0, 10, 4), "shadow": False, "row_k": 1.58, "radius": 0, "lumina": False, "upper_names": True,
+    },
+    "sunset": {
+        "name": "Sunset", "font": "outfit", "header_style": "marker",
+        "bg": (30, 14, 24), "bg_alpha": 0.82, "row_alt": (255, 140, 90, 14), "header": (46, 18, 34),
+        "text": (255, 242, 236), "dim": (196, 160, 156), "accent": (255, 120, 60), "me_bg": (255, 120, 60, 46),
+        "good": (110, 230, 140), "bad": (255, 84, 110), "purple": (210, 120, 255), "blue": (110, 180, 255),
+        "red": (255, 84, 110), "pit": (150, 120, 130), "yellow": (255, 206, 90), "border": (0, 0, 0, 0),
+        "ink": (30, 6, 0), "shadow": True, "row_k": 1.6, "radius": 12, "lumina": True, "upper_names": False,
+    },
 }
 
 import os
@@ -161,7 +241,7 @@ class Palette:
         self.key = theme
         self.bg = QColor(*t["bg"], int(255 * t["bg_alpha"] * opacity))
         ha = t.get("header_alpha")
-        self.header = QColor(*t["header"], int(255 * (ha * opacity if ha is not None
+        self.header = QColor(*t["header"], 0 if opacity <= 0.001 else int(255 * (ha * opacity if ha is not None
                                                       else min(1.0, t["bg_alpha"] * opacity + 0.08))))
         self.header_style = t.get("header_style", "marker" if t.get("lumina") else "line")
         self.recommended_font = t.get("font")
@@ -179,6 +259,7 @@ class Palette:
         self.radius = float(t.get("radius", 6))
         self.lumina = bool(t.get("lumina", False))  # klasės spalvos linija po eilute
         self.upper_names = bool(t.get("upper_names", False))
+        self.shape = t.get("shape", "round")  # round, chamfer (nukirsti kampai), slant (pasvirę šonai)
         self.edit = QColor(226, 177, 60)
         self._class_cache = {}
 
@@ -219,10 +300,21 @@ def _probe(family: str):
     return hit
 
 
+WEIGHT_SHIFT = {"light": -200, "normal": 0, "bold": 200, "black": 350}
+
+
+def font_style(config_data: dict, choice: str) -> tuple:
+    """(storio poslinkis, kursyvas) pasirinktam šriftui - kiekvienas šriftas atsimena savo stilių."""
+    st = (config_data.get("font_style") or {}).get(choice) or {}
+    return WEIGHT_SHIFT.get(st.get("weight", "normal"), 0), bool(st.get("italic", False))
+
+
 class Fonts:
-    def __init__(self, scale: float = 1.0, choice: str = "saira"):
+    def __init__(self, scale: float = 1.0, choice: str = "saira", weight_shift: int = 0, italic: bool = False):
         load_fonts()
         self.scale = scale
+        self.weight_shift = int(weight_shift)
+        self.italic = bool(italic)
         family = FONT_CHOICES.get(choice, FONT_CHOICES["saira"])[0]
         self.families = [family] + [f for f in FALLBACK if f != family]
         cap, digit_ratio = _probe(family)
@@ -264,7 +356,13 @@ class Fonts:
         f = QFont()
         f.setFamilies(self.families)
         f.setPixelSize(max(6, int(round(px))))
+        w0 = int(weight.value) if hasattr(weight, "value") else int(weight)
+        shift = getattr(self, "weight_shift", 0)
+        if shift:
+            weight = QFont.Weight(int(max(100, min(900, round((w0 + shift) / 100) * 100))))
         f.setWeight(weight)
+        if getattr(self, "italic", False):
+            f.setItalic(True)  # jei šriftas neturi kursyvo, Qt jį pasvirina pats
         f.setHintingPreference(QFont.HintingPreference.PreferNoHinting)
         f.setStyleStrategy(QFont.StyleStrategy.PreferAntialias)
         if _WGHT is not None:  # kintamo storio šriftai (VF) kitaip lieka ploniausi

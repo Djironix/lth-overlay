@@ -758,3 +758,48 @@ def clear_layout(lay):
 __all__ = ["Toggle", "Card", "SettingRow", "Segmented", "SliderField", "NumberField", "Combo", "ColorButton", "Pill",
            "Badge", "IconTile", "KpiTile", "LineChart", "ColumnList", "FlowGrid", "NavButton", "label", "button",
            "divider", "hbox", "vbox", "clear_layout", "QPoint"]
+
+
+class WheelGuard:
+    """Pelės ratukas neliečia sliderių / skaičių / sąrašų, kol ant jų nepaspausta (fokusas).
+    Slenkant puslapį ir netyčia užvedus pelę ant sliderio nustatymai nebesikeičia - ratukas slenka puslapį."""
+
+    _filter = None
+
+    @classmethod
+    def install(cls, app):
+        if cls._filter is not None or app is None:
+            return
+        from PySide6.QtCore import QEvent, QObject
+        from PySide6.QtWidgets import QAbstractScrollArea, QAbstractSlider, QAbstractSpinBox, QApplication, QScrollBar
+
+        class _F(QObject):
+            def eventFilter(self, obj, ev):
+                t = ev.type()
+                if t not in (QEvent.Type.Wheel, QEvent.Type.Polish, QEvent.Type.FocusIn, QEvent.Type.FocusOut):
+                    return False
+                if not isinstance(obj, (QAbstractSlider, QAbstractSpinBox, QComboBox)) or isinstance(obj, QScrollBar):
+                    return False
+                if t == QEvent.Type.Polish:  # ratukas nebeduoda fokuso - tik paspaudimas / Tab
+                    if obj.focusPolicy() & Qt.FocusPolicy.WheelFocus == Qt.FocusPolicy.WheelFocus:
+                        obj.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
+                    return False
+                if t == QEvent.Type.FocusIn:  # tik jei žmogus pats paspaudė ar atėjo su Tab
+                    obj.setProperty("_wheel_ok", ev.reason() in (Qt.FocusReason.MouseFocusReason,
+                                                                 Qt.FocusReason.TabFocusReason,
+                                                                 Qt.FocusReason.BacktabFocusReason))
+                    return False
+                if t == QEvent.Type.FocusOut:
+                    obj.setProperty("_wheel_ok", False)
+                    return False
+                if obj.hasFocus() and obj.property("_wheel_ok"):
+                    return False
+                w = obj.parent()
+                while w is not None and not isinstance(w, QAbstractScrollArea):
+                    w = w.parent()
+                if w is not None:
+                    QApplication.sendEvent(w.verticalScrollBar(), ev)
+                return True
+
+        cls._filter = _F(app)
+        app.installEventFilter(cls._filter)

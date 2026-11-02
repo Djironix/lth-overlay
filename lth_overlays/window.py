@@ -65,9 +65,16 @@ class OverlayWidget(QWidget):
     def cfg(self) -> dict:
         return self.ctx.config.widget(self.NAME)
 
+    def _make_fonts(self, scale):
+        from .theme import font_style
+        d = self.ctx.config.data
+        choice = d.get("font", "saira")
+        shift, italic = font_style(d, choice)
+        return Fonts(scale, choice, shift, italic)
+
     def apply_settings(self):
         c = self.cfg
-        self.fonts = Fonts(c.get("scale", 1.0), self.ctx.config.data.get("font", "saira"))
+        self.fonts = self._make_fonts(c.get("scale", 1.0))
         self._texts = {}
         self.pal = Palette(self.ctx.theme, c.get("opacity", 1.0), self.ctx.config.data.get("custom_colors"))
         self._key = object()  # priverstinis perpiešimas
@@ -269,6 +276,15 @@ class OverlayWidget(QWidget):
             p.fillRect(QRectF(0, hh * 0.22, 3, hh * 0.56), g)
             p.setPen(pal.accent)
             self.draw_text(p, QRectF(12, 0, r.width() - 24, hh), title, "tiny")
+        elif style == "tab":  # įstrižas akcento skirtukas po pavadinimu (TV transliacijų stilius)
+            from PySide6.QtGui import QPolygonF
+            tw = min(r.width() * 0.7, self.text_width(title, "tiny") + hh * 1.6)
+            sl = hh * 0.45
+            p.setBrush(pal.accent)
+            p.drawPolygon(QPolygonF([QPointF(0, 0), QPointF(tw, 0), QPointF(tw - sl, hh), QPointF(0, hh)]))
+            p.fillRect(QRectF(0, hh - 2, r.width(), 2), pal.accent)
+            p.setPen(pal.ink)
+            self.draw_text(p, QRectF(12, 0, tw - sl - 12, hh), title, "tiny")
         elif style == "solid":  # TV grafika: antraštė visa akcento spalvos, baltas tekstas
             p.setPen(pal.text)
             self.draw_text(p, QRectF(10, 0, r.width() - 20, hh), title, "tiny")
@@ -290,9 +306,9 @@ class OverlayWidget(QWidget):
             return False
         if self.editing or snap is None:
             return True
-        if c.get("hide_in_garage") and snap.in_garage and not snap.watching:
+        if c.get("hide_in_garage") and snap.in_garage:
             return False
-        if c.get("hide_when_spectating") and snap.watching:
+        if c.get("hide_when_spectating") and (snap.watching or snap.replay):
             return False
         if c.get("race_only") and snap.session_type != "race":  # seni nustatymai (iki v0.6)
             return False
@@ -368,7 +384,7 @@ class OverlayWidget(QWidget):
         timing = self.fast_source()
         if timing is None:
             return
-        if not self.editing and getattr(self.ctx, "idle", False):
+        if not self.editing and self.IDLE_THROTTLE and getattr(self.ctx, "idle", False):
             now = time.perf_counter()
             if now - getattr(self, "_last_fast", 0.0) < 1.0 / self.IDLE_HZ:
                 return
@@ -380,6 +396,8 @@ class OverlayWidget(QWidget):
         except Exception:  # noqa: BLE001 - laikmatis neturi nulaužti programos
             pass
         self.cost_s += time.perf_counter() - t0
+
+    IDLE_THROTTLE = True  # stovint (garaže, boksuose) sklandūs valdikliai sulėtinami iki IDLE_HZ
 
     def fast_tick(self, timing) -> bool:
         return False
@@ -422,12 +440,40 @@ class OverlayWidget(QWidget):
         p.fillRect(self.rect(), Qt.GlobalColor.transparent)
         p.setCompositionMode(QPainter.CompositionMode.CompositionMode_SourceOver)
         self._drew_bg = False
+        shape = getattr(self.pal, "shape", "round")
+        if shape != "round":  # temos forma (nukirsti kampai / pasvirę šonai): viskas piešiama formos viduje
+            p.setClipPath(self.shape_path(QRectF(self.rect())))
         self.paint_content(p)
+        if shape != "round":
+            p.setClipping(False)
         if self._drew_bg:
             self._paint_outline(p)
         if self.editing and not self.preview_mode:
             self._paint_edit(p)
         p.end()
+
+    # ---------------- temos forma ----------------
+    def shape_cut(self) -> float:
+        return max(5.0, min(14.0, self.fonts.em_small * 0.9))
+
+    def shape_path(self, r: QRectF):
+        """Valdiklio kontūras pagal temą: chamfer - nukirsti viršutinis kairys ir apatinis dešinys kampai,
+        slant - abu šonai pasvirę (lyg greitis)."""
+        from PySide6.QtGui import QPainterPath, QPolygonF
+        path = QPainterPath()
+        shape = getattr(self.pal, "shape", "round")
+        c = min(self.shape_cut(), r.height() / 3, r.width() / 4)
+        if shape == "chamfer":
+            path.addPolygon(QPolygonF([QPointF(r.left() + c, r.top()), QPointF(r.right(), r.top()),
+                                       QPointF(r.right(), r.bottom() - c), QPointF(r.right() - c, r.bottom()),
+                                       QPointF(r.left(), r.bottom()), QPointF(r.left(), r.top() + c)]))
+        elif shape == "slant":
+            path.addPolygon(QPolygonF([QPointF(r.left() + c, r.top()), QPointF(r.right(), r.top()),
+                                       QPointF(r.right() - c, r.bottom()), QPointF(r.left(), r.bottom())]))
+        else:
+            path.addRoundedRect(r, self.pal.radius, self.pal.radius)
+        path.closeSubpath()
+        return path
 
     # ---------------- kontūras (stroke) ----------------
     def outline_style(self):
@@ -461,7 +507,8 @@ class OverlayWidget(QWidget):
         width, col = st
         rad = self._drew_bg if not isinstance(self._drew_bg, bool) else self.pal.radius
         dpr = self.devicePixelRatioF()
-        key = (self.width(), self.height(), width, col.rgba(), rad, dpr)
+        shape = getattr(self.pal, "shape", "round")
+        key = (self.width(), self.height(), width, col.rgba(), rad, dpr, shape)
         cache = getattr(self, "_outline_pm", None)
         if cache is None or cache[0] != key:  # antialiasintas kontūras kainuoja - piešiam vieną kartą
             from PySide6.QtGui import QPixmap
@@ -472,12 +519,20 @@ class OverlayWidget(QWidget):
             q.setRenderHint(QPainter.RenderHint.Antialiasing)
             q.setPen(QPen(col, width))
             q.setBrush(Qt.BrushStyle.NoBrush)
-            q.drawRoundedRect(QRectF(self.rect()).adjusted(width / 2, width / 2, -width / 2, -width / 2), rad, rad)
+            inner = QRectF(self.rect()).adjusted(width / 2, width / 2, -width / 2, -width / 2)
+            if shape == "round":
+                q.drawRoundedRect(inner, rad, rad)
+            else:
+                q.drawPath(self.shape_path(inner))
             q.end()
             cache = self._outline_pm = (key, pm)
         pm = cache[1]
         w, h = self.width(), self.height()
-        b = int(min(min(w, h) / 2, rad + width + 2))  # tik kraštų juostos, ne visas paveikslėlis
+        edge = rad if shape == "round" else self.shape_cut()
+        b = int(min(min(w, h) / 2, edge + width + 2))  # tik kraštų juostos, ne visas paveikslėlis
+        if shape == "slant":
+            p.drawPixmap(0, 0, pm)  # pasvirę šonai eina per visą aukštį
+            return
         for x, y, bw, bh in ((0, 0, w, b), (0, h - b, w, b), (0, b, b, h - 2 * b), (w - b, b, b, h - 2 * b)):
             if bw > 0 and bh > 0:
                 p.drawPixmap(QRectF(x, y, bw, bh), pm, QRectF(x * dpr, y * dpr, bw * dpr, bh * dpr))
@@ -667,7 +722,7 @@ class OverlayWidget(QWidget):
             self.push(self._snap, force=True)
 
     def _rescale_keep_corner(self, zone, geo):
-        self.fonts = Fonts(self._scale(), self.ctx.config.data.get("font", "saira"))
+        self.fonts = self._make_fonts(self._scale())
         self._texts = {}
         w = self.target_width()
         self._key = object()

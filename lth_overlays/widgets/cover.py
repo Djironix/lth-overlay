@@ -26,7 +26,7 @@ class GarageCoverWidget(OverlayWidget):
             return False
         if self.editing or snap is None:
             return True
-        return bool(snap.in_garage and not snap.watching)
+        return bool(getattr(snap, "garage_screen", snap.in_garage) and not snap.watching)
 
     def content_key(self, snap):
         c = self.cfg

@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 from ..registry import RELATIVE_COLUMNS
-from ..theme import fmt_lap, fmt_rel, short_name
+from ..theme import fmt_gap, fmt_lap, fmt_rel, short_name
 from .standings import irating_text
-from .table import RIGHT, Cell, TableWidget, ordered_columns
+from .table import CENTER, RIGHT, Cell, TableWidget, ordered_columns
 
 
 class RelativeWidget(TableWidget):
@@ -13,7 +13,9 @@ class RelativeWidget(TableWidget):
     MIN_WIDTH = 220
     HEIGHT_MODE = "rows"
     WIDTHS = {"classbar": 0.01, "pos": 1.6, "number": 2.2, "flag": 1.45, "name": None, "brand": 2.3,
-              "carname": 6.5, "status": 2.4, "irating": 2.3, "irchange": 2.2, "last": 3.9, "best": 3.9, "license": 2.0, "delta": 2.9, "catch": 3.0, "gap": 3.0}
+              "carname": 6.5, "status": 2.4, "irating": 2.8, "irchange": 2.2, "last": 3.9, "best": 3.9, "license": 2.0, "delta": 2.9, "catch": 3.0, "gap": 3.0,
+              "change": 0.9, "start": 1.9, "leadergap": 3.4, "interval": 3.2, "tire": 1.2, "pitstops": 1.6,
+              "lapsdone": 2.0, "laps": 11.5}
 
     def __init__(self, ctx):
         self._rows = []
@@ -26,7 +28,9 @@ class RelativeWidget(TableWidget):
     def content_key(self, snap):
         c = self.cfg
         cols = ordered_columns(c, RELATIVE_COLUMNS)
-        self.WIDTHS = dict(type(self).WIDTHS, license=3.6 if c.get("license_style") == "full" else 2.0)
+        self.WIDTHS = dict(type(self).WIDTHS, license=3.6 if c.get("license_style") == "full" else 2.0,
+                           laps=self.laps_width(), brand=2.9 if c.get("brand_style", "logo") == "logo" else 2.3,
+                           status=self.pit_width() if c.get("pit_style", "stop") != "badge" else 2.4)
         self._cols = ["classbar"] + cols
         rel = snap.relative
         me_i = next((i for i, r in enumerate(rel) if r.is_me), None)
@@ -82,9 +86,10 @@ class RelativeWidget(TableWidget):
             elif k == "carname":
                 cells.append(self.carname_cell(k, r))
             elif k == "status":
-                cells.append(self.status_cell(k, r, race))
+                cells.append(self.pit_cell(k, r, race) if self.cfg.get("pit_style", "stop") != "badge"
+                             else self.status_cell(k, r, race))
             elif k == "irating":
-                cells.append(Cell(k, irating_text(r.irating), fg="dim", align=RIGHT, font="small"))
+                cells.append(self.irating_cell(k, r))
             elif k == "irchange":
                 cells.append(self.irchange_cell(k, r, snap))
             elif k == "last":
@@ -96,13 +101,38 @@ class RelativeWidget(TableWidget):
             elif k == "license":
                 cells.append(self.license_cell(k, r))
             elif k == "delta":
-                cells.append(self._delta_cell(rr))
+                cells.append(self.delta_cell(rr))
             elif k == "catch":
                 t = ""
                 if not rr.is_me and rr.gap > 0 and rr.laps_to_catch is not None and rr.lap_rel == 0:
                     t = f"{rr.laps_to_catch:.0f} laps" if rr.catchable is not False else "no catch"
                     t = t if rr.laps_to_catch < 99 else ""
                 cells.append(Cell(k, t, fg="dim", align=RIGHT, font="small"))
+            elif k == "change":
+                ch = r.pos_change_lap if race else 0
+                cells.append(Cell(k, "▲" if ch > 0 else "▼" if ch < 0 else "", fg="good" if ch > 0 else "bad",
+                                  align=CENTER, font="tiny"))
+            elif k == "start":
+                ch = r.pos_change_start if race else 0
+                cells.append(Cell(k, f"{ch:+d}" if ch else "", fg="good" if ch > 0 else "bad", align=RIGHT, font="small"))
+            elif k == "leadergap":
+                if r.gap is None and not r.gap_laps:
+                    t = "Leader" if race and r.class_pos == 1 else ""
+                else:
+                    t = fmt_gap(r.gap, r.gap_laps if race else 0, r.stale or r.approx)
+                cells.append(Cell(k, t, fg="dim", align=RIGHT, font="small"))
+            elif k == "interval":
+                t = fmt_gap(r.interval, r.interval_laps, r.stale or r.approx) \
+                    if (r.interval is not None or r.interval_laps) else ""
+                cells.append(Cell(k, t, fg="dim", align=RIGHT, font="small"))
+            elif k == "tire":
+                cells.append(Cell(k, "W" if r.tire == 1 else "", fg="blue", align=CENTER, font="tiny"))
+            elif k == "pitstops":
+                cells.append(Cell(k, str(r.pit_stops) if r.pit_stops else "", fg="dim", align=CENTER, font="small"))
+            elif k == "lapsdone":
+                cells.append(Cell(k, str(r.laps) if r.laps else "", fg="dim", align=RIGHT, font="small"))
+            elif k == "laps":
+                cells.append(self.laps_cell(k, r, snap))
             elif k == "gap":
                 t = "" if rr.is_me else fmt_rel(rr.gap, rr.stale or rr.approx)
                 cells.append(Cell(k, t, fg="dim" if (rr.stale or rr.approx) else fg, align=RIGHT, font="bold"))
@@ -110,20 +140,6 @@ class RelativeWidget(TableWidget):
         if race and r.flag_bits & 0x20 and self.cfg.get("blue_rows", True):
             flags = flags + ("blue",)
         return ("car", tuple(cells), flags)
-
-    @staticmethod
-    def _delta_cell(rr):
-        if rr.is_me or rr.delta is None:
-            return Cell("delta", "", align=RIGHT)
-        d = rr.delta
-        pre = "" if rr.delta_exact else "~"
-        # Priekyje: gap'as mažėja = tu greitesnis (gerai). Už tavęs: mažėja = tave vejasi (blogai).
-        ahead = rr.gap > 0
-        if d < -0.05:
-            return Cell("delta", f"▼{pre}{-d:.1f}", fg="good" if ahead else "bad", align=RIGHT, font="small")
-        if d > 0.05:
-            return Cell("delta", f"▲{pre}{d:.1f}", fg="bad" if ahead else "good", align=RIGHT, font="small")
-        return Cell("delta", "= 0.0", fg="dim", align=RIGHT, font="small")
 
     def desired_height(self) -> int:
         n = max(1, len(self._rows))

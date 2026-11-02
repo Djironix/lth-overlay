@@ -1,4 +1,4 @@
-LTH Overlays 0.6.4
+LTH Overlays 0.7.0
 ==================
 
 In-house iRacing overlays for the LTH community. 35 widgets, all set up from one Control
@@ -8,10 +8,42 @@ Pit helper, Pit commands, Pit window, Incidents, Stint, Formation, Radio, Fuel, 
 Inputs, G-force, Tyres, Car setting changes, Engine warnings, Track map, Flat track map,
 Weather, Rain Master, Garage cover, Stream chat, Connection and Performance.
 
+New in 0.7.0
+------------
+- Automatic updates: the app checks the LTH GitHub page (never while you drive) and shows
+  "Update" in the Control Center. One click downloads, checks and restarts. Settings stay.
+- Duplicate any widget (e.g. two flag panels or a blind spot block on each side of the screen).
+- Flags: new styles - LED panel (trackside), flag tile, waving flag, marshal light, thin strip.
+  Choose which flags each copy shows. Fixes: formation lap no longer shows for the whole race,
+  start flags really turn off, blue now shows (iRacing's flag plus an early warning when a
+  faster car is right behind).
+- Radar / Blind spot: side bars or arrows, one side per copy, the side car moves with how far
+  it is ahead or behind (metres shown, like a spotter).
+- Standings and Relative: Last 5 / 10 laps (difference, squares or times; compared with your
+  pace, your last lap or their own best / average), Delta in Standings, every Standings column
+  in Relative, car logos, iRating as a coloured block, 3D country flags with an optional frame,
+  black / meatball / DQ / blue as flag icons, pit column shows the last stop (lap and time, live
+  seconds while in the pit lane), header / footer info left, centre or right, Lap 12/23.4.
+- Inputs: drag the parts into any order (wheel first, pedals in front...), your own wheel PNG,
+  no more lag while standing still.
+- Track map: preview shows Spa instead of a circle, the map draws itself while it records, and
+  recording no longer restarts after a stop or the pit lane.
+- Performance widget: whole PC CPU, RAM and GPU load and video memory, with bars.
+- Fonts: weight (light to black) and italic for every font. 10 new themes, some with cut
+  corners or slanted sides (LTH Velocity, Pit wall, Endurance, Redline, Ice, Night race,
+  Carbon gold, Tricolore, Telemetry, Sunset).
+- Hide in garage / when spectating now works for every widget (also out of the car and in
+  replays). Incidents can stay visible all the time. Stream chat hides when you are not live.
+- Background opacity down to 0% for a minimal look. Sliders no longer change when you scroll
+  over them by accident.
+- Less CPU spikes: lap files are saved in the background, the app runs at low priority
+  (iRacing always comes first) and a CPU spike log shows what was working (Performance page).
+- Setups page removed.
+
 New in 0.6.4
 ------------
-- Top menu: Overview, Widgets, Layout, Appearance, Telemetry, Records, Drivers. Setups and
-  Stream moved under the gear button. Appearance has a gold outline until you open it once.
+- Top menu: Overview, Widgets, Layout, Appearance, Telemetry, Records, Drivers. Stream moved
+  under the gear button. Appearance has a gold outline until you open it once.
 - Overview: the big track is now Spa-Francorchamps with a dot driving a typical GT3 lap
   (slow through La Source, flat out on Kemmel). After you drive, it shows the last track you
   drove and the dot runs your own best lap there; while you are in iRacing the dot is you.
@@ -22,7 +54,7 @@ New in 0.6.4
 New in 0.6.3
 ------------
 - New Control Center look: navigation moved to the top bar (Overview, Widgets, Layout,
-  Telemetry, Records, Setups, Drivers, Stream), the rest is under the gear button
+  Telemetry, Records, Drivers, Stream), the rest is under the gear button
   (Profiles, Appearance, Hotkeys, General, Performance, Diagnostics, About, Quit).
 - Profile chip with your iRacing name: switch profiles or turn auto switching on/off.
 - Bell button with the latest notifications (turns gold when something new happens).
@@ -45,10 +77,8 @@ New in 0.6.2
 - New Overview dashboard: laps and time this month, latest session, most driven car, laps
   per day this week.
 - Records page: your all-time best lap per car and track, open it in Telemetry.
-- Setups page: import LTH setup packs (.zip) and install them into
-  Documents\iRacing\setups\<car>\LTH automatically when you join a session.
 - Drivers: optional one-click lists for the LTH team and the Lithuanian iRacing Hub.
-- Notifications in the Control Center (new personal best, setups installed).
+- Notifications in the Control Center (new personal best).
 
 New in 0.6.1
 ------------
@@ -133,7 +163,7 @@ Control Center
 - Appearance: 10 themes (incl. LTH), 33 fonts, outline, single colours and car class colours.
 - Drivers: tag friends / teammates / rivals (by iRacing ID or from the current session), or add
   the LTH team / Lithuanian iRacing Hub lists in one click.
-- Records and Setups: personal bests, LTH setup packs.
+- Records: personal bests per car and track.
 - Telemetry: session report and lap comparison, import / export .lthlap files.
 - Stream: OBS browser source URLs (Copy button for each widget or the whole layout).
 - Hotkeys, General (startup, timing, track maps), Performance, Diagnostics.

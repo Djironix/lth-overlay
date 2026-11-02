@@ -179,6 +179,8 @@ def single_instance(name: str):
     _k32.CreateMutexW.restype = wintypes.HANDLE
     h = _k32.CreateMutexW(None, False, name)
     if _k32.GetLastError() == 183:  # ERROR_ALREADY_EXISTS
+        if h:
+            _k32.CloseHandle(h)  # kitaip mūsų rankenėlė laikytų mutex'ą gyvą ir po kito proceso išėjimo
         return None
     return h
 
@@ -310,3 +312,159 @@ class ProcStats:
                 return int(f.read().split()[1]) * os.sysconf("SC_PAGE_SIZE") / 1048576
         except OSError:
             return 0.0
+
+
+class SystemStats:
+    """Viso kompiuterio apkrova (be admin teisių, be papildomų paketų):
+    CPU % (GetSystemTimes), RAM (GlobalMemoryStatusEx), GPU 3D % ir VRAM (Windows PDH skaitikliai,
+    tie patys, kuriuos rodo Task Manager). Ko nepavyksta nuskaityti - None."""
+
+    def __init__(self):
+        self._cpu_last = None
+        self._pdh = None
+        self._pdh_failed = False
+
+    # ---- CPU ----
+    def cpu(self):
+        t = self._cpu_times()
+        if t is None:
+            return None
+        idle, total = t
+        out = None
+        if self._cpu_last is not None:
+            di, dt = idle - self._cpu_last[0], total - self._cpu_last[1]
+            if dt > 0:
+                out = max(0.0, min(100.0, (1.0 - di / dt) * 100.0))
+        self._cpu_last = (idle, total)
+        return out
+
+    @staticmethod
+    def _cpu_times():
+        if IS_WIN:
+            ft = [wintypes.FILETIME() for _ in range(3)]
+            if not _k32.GetSystemTimes(ctypes.byref(ft[0]), ctypes.byref(ft[1]), ctypes.byref(ft[2])):
+                return None
+            v = [(f.dwHighDateTime << 32) | f.dwLowDateTime for f in ft]
+            return v[0], v[1] + v[2]  # kernel laikas jau apima idle
+        try:
+            with open("/proc/stat") as fh:
+                parts = [float(x) for x in fh.readline().split()[1:]]
+            idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+            return idle, sum(parts)
+        except (OSError, ValueError, IndexError):
+            return None
+
+    # ---- RAM ----
+    @staticmethod
+    def ram():
+        """(naudojama GB, viso GB, %)"""
+        if IS_WIN:
+            class MS(ctypes.Structure):
+                _fields_ = [("dwLength", wintypes.DWORD), ("dwMemoryLoad", wintypes.DWORD),
+                            ("ullTotalPhys", ctypes.c_ulonglong), ("ullAvailPhys", ctypes.c_ulonglong),
+                            ("ullTotalPageFile", ctypes.c_ulonglong), ("ullAvailPageFile", ctypes.c_ulonglong),
+                            ("ullTotalVirtual", ctypes.c_ulonglong), ("ullAvailVirtual", ctypes.c_ulonglong),
+                            ("ullAvailExtendedVirtual", ctypes.c_ulonglong)]
+            ms = MS()
+            ms.dwLength = ctypes.sizeof(MS)
+            if not _k32.GlobalMemoryStatusEx(ctypes.byref(ms)):
+                return None
+            tot = ms.ullTotalPhys / 2 ** 30
+            used = (ms.ullTotalPhys - ms.ullAvailPhys) / 2 ** 30
+            return used, tot, used / tot * 100 if tot else 0.0
+        try:
+            info = {}
+            with open("/proc/meminfo") as fh:
+                for line in fh:
+                    k, v = line.split(":", 1)
+                    info[k] = float(v.split()[0]) / 2 ** 20
+            tot, avail = info["MemTotal"], info.get("MemAvailable", info.get("MemFree", 0))
+            return tot - avail, tot, (tot - avail) / tot * 100 if tot else 0.0
+        except (OSError, ValueError, KeyError):
+            return None
+
+    # ---- GPU (PDH) ----
+    def gpu(self):
+        """(3D apkrova %, naudojama VRAM GB) arba None."""
+        if not IS_WIN or self._pdh_failed:
+            return None
+        try:
+            if self._pdh is None:
+                self._pdh_open()
+            pdh, q, c_util, c_mem = self._pdh
+            if pdh.PdhCollectQueryData(q) != 0:
+                return None
+            util = self._sum(pdh, c_util)
+            mem = self._sum(pdh, c_mem, large=True) if c_mem else None
+            if util is None:
+                return None
+            return min(100.0, util), (mem / 2 ** 30 if mem is not None else None)
+        except (OSError, AttributeError, ValueError):
+            self._pdh_failed = True
+            return None
+
+    def _pdh_open(self):
+        pdh = ctypes.windll.pdh
+        q = ctypes.c_void_p()
+        if pdh.PdhOpenQueryW(None, None, ctypes.byref(q)) != 0:
+            raise OSError("PdhOpenQuery")
+        c_util = ctypes.c_void_p()
+        if pdh.PdhAddEnglishCounterW(q, "\\GPU Engine(*engtype_3D)\\Utilization Percentage", None,
+                                     ctypes.byref(c_util)) != 0:
+            raise OSError("no GPU counters")
+        c_mem = ctypes.c_void_p()
+        if pdh.PdhAddEnglishCounterW(q, "\\GPU Adapter Memory(*)\\Dedicated Usage", None, ctypes.byref(c_mem)) != 0:
+            c_mem = None
+        pdh.PdhCollectQueryData(q)  # pirmas matavimas - bazė
+        self._pdh = (pdh, q, c_util, c_mem)
+
+    @staticmethod
+    def _sum(pdh, counter, large=False):
+        PDH_FMT_DOUBLE, PDH_FMT_LARGE, PDH_MORE_DATA = 0x200, 0x400, 0x800007D2
+
+        class VAL(ctypes.Structure):
+            _fields_ = [("CStatus", wintypes.DWORD), ("pad", wintypes.DWORD), ("value", ctypes.c_double)]
+
+        class VAL_L(ctypes.Structure):
+            _fields_ = [("CStatus", wintypes.DWORD), ("pad", wintypes.DWORD), ("value", ctypes.c_longlong)]
+
+        class ITEM(ctypes.Structure):
+            _fields_ = [("szName", ctypes.c_wchar_p), ("FmtValue", VAL_L if large else VAL)]
+
+        size = wintypes.DWORD(0)
+        count = wintypes.DWORD(0)
+        fmt = PDH_FMT_LARGE if large else PDH_FMT_DOUBLE
+        r = pdh.PdhGetFormattedCounterArrayW(counter, fmt, ctypes.byref(size), ctypes.byref(count), None)
+        if (r & 0xFFFFFFFF) != PDH_MORE_DATA or size.value == 0:
+            return None
+        buf = (ctypes.c_byte * size.value)()
+        r = pdh.PdhGetFormattedCounterArrayW(counter, fmt, ctypes.byref(size), ctypes.byref(count), buf)
+        if r != 0:
+            return None
+        items = ctypes.cast(buf, ctypes.POINTER(ITEM))
+        per = {}  # vaizdo plokštė (luid) -> suma; kelios plokštės (integruota + atskira) nesumuojamos
+        for i in range(count.value):
+            it = items[i]
+            if it.FmtValue.CStatus in (0, 1):  # PDH_CSTATUS_VALID_DATA / NEW_DATA
+                key = adapter_key(it.szName or "")
+                per[key] = per.get(key, 0.0) + float(it.FmtValue.value)
+        return max(per.values()) if per else 0.0
+
+
+def adapter_key(instance: str) -> str:
+    """„pid_1234_luid_0x00000000_0x0000D1F2_phys_0_eng_0_engtype_3D“ -> „0x00000000_0x0000D1F2“."""
+    import re
+    m = re.search(r"luid_(0x[0-9A-Fa-f]+_0x[0-9A-Fa-f]+)", instance)
+    return m.group(1) if m else instance
+
+
+def set_low_priority(on: bool) -> bool:
+    """Programos prioritetas Windows'e: Below normal (rekomenduojama) arba Normal.
+    iRacing visada gauna procesorių pirmas - mūsų trumpi darbo šuoliai jam netrukdo. Admin teisių nereikia."""
+    if not IS_WIN:
+        return False
+    BELOW_NORMAL, NORMAL = 0x00004000, 0x00000020
+    try:
+        return bool(_k32.SetPriorityClass(_k32.GetCurrentProcess(), BELOW_NORMAL if on else NORMAL))
+    except OSError:
+        return False

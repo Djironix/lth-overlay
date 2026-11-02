@@ -26,14 +26,14 @@ from .pages import (AboutPage, AppearancePage, DiagnosticsPage, GeneralPage, Hot
 from .preview import PreviewRenderer
 from .drivers_page import DriversPage
 from .stream_page import StreamPage
-from .library_pages import RecordsPage, SetupsPage
+from .library_pages import RecordsPage
 from .telemetry_page import TelemetryPage
 from .style import T, icon, qcolor, qss, ui_font
 
 # Viršutinis meniu (GoFast stiliaus „piliulės“) ir nustatymų meniu (krumpliaratis)
 NAV_MAIN = (("overview", "Overview"), ("widgets", "Widgets"), ("layout", "Layout"), ("appearance", "Appearance"),
             ("telemetry", "Telemetry"), ("records", "Records"), ("drivers", "Drivers"))
-NAV_MORE = (("profiles", "Profiles", "layers"), ("setups", "Setups", "wrench"), ("stream", "Stream", "broadcast"),
+NAV_MORE = (("profiles", "Profiles", "layers"), ("stream", "Stream", "broadcast"),
             ("hotkeys", "Hotkeys", "keyboard"), ("general", "General", "settings"),
             ("performance", "Performance", "activity"), ("diagnostics", "Diagnostics", "bug"), ("about", "About", "info"))
 HIGHLIGHT = "appearance"  # apvestas auksu, kol žmogus jo neatidarė - kad pastebėtų temas
@@ -42,7 +42,7 @@ PAGES = {"overview": OverviewPage, "widgets": WidgetsPage, "layout": LayoutPage,
          "appearance": AppearancePage, "hotkeys": HotkeysPage, "general": GeneralPage,
          "performance": PerformancePage, "diagnostics": DiagnosticsPage, "about": AboutPage,
          "stream": StreamPage, "drivers": DriversPage,
-         "telemetry": TelemetryPage, "records": RecordsPage, "setups": SetupsPage}
+         "telemetry": TelemetryPage, "records": RecordsPage}
 
 
 class ControlCenter(QMainWindow):
@@ -61,6 +61,8 @@ class ControlCenter(QMainWindow):
         self._current = None
         self._told_tray = False
 
+        from .components import WheelGuard
+        WheelGuard.install(QApplication.instance())
         root = QWidget()
         root.setObjectName("Root")
         main = QVBoxLayout(root)
@@ -151,6 +153,15 @@ class ControlCenter(QMainWindow):
             b.setToolTip(tip)
             b.setCursor(Qt.CursorShape.PointingHandCursor)
             return b
+        # atnaujinimas (rodomas tik kai yra nauja versija)
+        self.b_upd = QPushButton("Update")
+        self.b_upd.setObjectName("NavPill")
+        self.b_upd.setProperty("hl", True)
+        self.b_upd.setIcon(icon("download", T["accent"]))
+        self.b_upd.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.b_upd.clicked.connect(lambda: self.go("general"))
+        self.b_upd.hide()
+        h.addWidget(self.b_upd)
         # nustatymai
         self.b_settings = icon_btn("settings", "Settings")
         m = QMenu(self.b_settings)
@@ -318,6 +329,22 @@ class ControlCenter(QMainWindow):
         self._show(page, "widgets")
         page.on_show()
 
+    def refresh_widget_list(self):
+        """Po Duplicate / Delete copy: Widgets ir Layout puslapiai iš naujo."""
+        wp = self._pages.get("widgets")
+        if wp is not None:
+            wp.sync_cards()
+        lp = self._pages.get("layout")
+        if lp is not None:
+            lp.refresh_list()
+        self.preview.invalidate()
+
+    def forget_widget_page(self, name):
+        old = self._widget_pages.pop(name, None)
+        if old is not None:
+            self.stack.removeWidget(old)
+            old.deleteLater()
+
     def rebuild_widget_page(self, name):
         old = self._widget_pages.pop(name, None)
         if old is not None:
@@ -434,6 +461,13 @@ class ControlCenter(QMainWindow):
             self.perf_lbl.setText(f"CPU {perf['cpu']:.1f}%  ·  {perf.get('ram', 0):.0f} MB"
                                   + (f"  ·  iRacing {perf['fps']:.0f} FPS" if perf.get("fps") else ""))
         self.t_overlays.set_silent(not self.ctx.hidden_all)
+        upd = getattr(self.ctx, "updater", None)
+        want = bool(upd is not None and upd.newer())
+        if want != self.b_upd.isVisible():
+            self.b_upd.setText(f"Update {upd.info['version']}" if want else "Update")
+            self.b_upd.setVisible(want)
+            self._compact = -1
+            self._fit_topnav()
         notes_all = getattr(self.ctx, "notifications", [])
         hot = bool(notes_all) and notes_all[-1][0] > getattr(self, "_notes_seen", 0)
         if hot != getattr(self, "_notes_hot", False):  # nauji pranešimai - auksinis varpelis

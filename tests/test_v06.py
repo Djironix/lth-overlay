@@ -404,23 +404,6 @@ def test_suggested_driver_lists_are_optional(oapp, qapp):
     oapp.control.hide()
 
 
-def test_setup_pack_import_is_safe(tmp_path):
-    import zipfile
-    from lth_overlays.setups import SetupLibrary
-    z = tmp_path / "pack.zip"
-    with zipfile.ZipFile(z, "w") as f:
-        f.writestr("LTH pack/bmwm4gt3/spa/race.sto", "x")
-        f.writestr("../../evil.sto", "bad")
-        f.writestr("porsche992rgt3/quali.sto", "q")
-        f.writestr("virus.exe", "no")
-    lib = SetupLibrary(str(tmp_path / "lib"))
-    res = lib.import_files([str(z)], car_hint="ferrari296gt3")
-    assert res.get("bmwm4gt3") == 1 and res.get("porsche992rgt3") == 1
-    files = [os.path.relpath(os.path.join(r, n), lib.root) for r, _, fs in os.walk(lib.root) for n in fs]
-    assert all(not f.startswith("..") for f in files) and not any(f.endswith(".exe") for f in files)
-    assert os.path.isfile(os.path.join(lib.root, "bmwm4gt3", "spa", "race.sto"))
-
-
 def test_dashboard_stats():
     import datetime
     from lth_overlays.sessions import stats
@@ -440,7 +423,7 @@ def test_new_control_center_pages(oapp, qapp, engine):
     oapp.sessions.observe(engine.recorder)
     oapp.open_control_center()
     cc = oapp.control
-    for page in ("overview", "records", "setups", "telemetry", "drivers"):
+    for page in ("overview", "records", "telemetry", "drivers"):
         cc.go(page)
         qapp.processEvents()
         assert not cc.grab().isNull()
@@ -457,7 +440,7 @@ def test_top_navigation_shell(oapp, qapp):
     assert set(cc._nav) == {k for k, _ in NAV_MAIN}
     acts = [a.text() for a in cc.b_settings.menu().actions() if a.text()]
     assert len(acts) == len(NAV_MORE) + 1 and acts[-1].startswith("Quit")
-    assert "Setups" in acts and "Stream" in acts and "appearance" in cc._nav
+    assert "Setups" not in acts and "Stream" in acts and "appearance" in cc._nav
     # Appearance apvestas, kol neatidarytas
     oapp.config.data.pop("seen_appearance", None)
     cc._nav["appearance"].setProperty("hl", True)
@@ -521,3 +504,162 @@ def test_spa_outline_and_moving_dot(qapp, engine):
     assert not w._timer.isActive()
     prof = _lap_profile(engine.recorder.laps[-1])
     assert prof is not None and prof[1][0] == 0 and prof[1][-1] <= 1.0 and prof[2] > 0
+
+
+# ---------------------------------------------------------------- v0.7.0
+def test_update_apply_and_rollback(tmp_path, monkeypatch):
+    """lth_boot: parsiųstas zip (patikrinta SHA-256) pakeičia app aplanką, sena versija - _prev."""
+    import hashlib
+    import json
+    import zipfile
+    import lth_boot
+    monkeypatch.setenv("XDG_CONFIG_HOME", str(tmp_path / "cfg"))
+    monkeypatch.setenv("APPDATA", str(tmp_path / "cfg"))
+    app = tmp_path / "app"
+    for pkg in ("lth_overlays", "lth_timing"):
+        (app / pkg).mkdir(parents=True)
+        (app / pkg / "__init__.py").write_text("OLD = 1\n")
+    (app / "lth_overlays" / "gone.py").write_text("x = 1\n")
+    (app / "run.py").write_text("old run\n")
+    z = tmp_path / "u.zip"
+    with zipfile.ZipFile(z, "w") as f:
+        f.writestr("app/lth_overlays/__init__.py", "NEW = 1\n")
+        f.writestr("app/lth_timing/__init__.py", "NEW = 1\n")
+        f.writestr("app/run.py", "new run\n")
+        f.writestr("app/../evil.py", "bad\n")
+    upd = tmp_path / "cfg" / "LTH Overlays" / "updates"
+    upd.mkdir(parents=True)
+    sha = hashlib.sha256(z.read_bytes()).hexdigest()
+    (upd / "pending.json").write_text(json.dumps({"zip": str(z), "sha256": sha, "version": "9.9.9"}))
+    assert lth_boot.apply_pending(str(app)) == "9.9.9"
+    assert "NEW" in (app / "lth_overlays" / "__init__.py").read_text()
+    assert not (app / "lth_overlays" / "gone.py").exists()
+    assert (app / "run.py").read_text() == "old run\n"  # vykdomas failas nekeičiamas
+    assert not (tmp_path / "evil.py").exists() and not (upd / "pending.json").exists()
+    assert lth_boot.rollback(str(app))
+    assert "OLD" in (app / "lth_overlays" / "__init__.py").read_text()
+    # sugadintas failas - nieko nekeičia
+    z.write_bytes(b"broken")
+    (upd / "pending.json").write_text(json.dumps({"zip": str(z), "sha256": sha, "version": "9.9.9"}))
+    assert lth_boot.apply_pending(str(app)) is None
+    assert "OLD" in (app / "lth_overlays" / "__init__.py").read_text()
+
+
+def test_updater_finds_newer_release(oapp, monkeypatch):
+    import io
+    import json
+    from lth_overlays import updater as U
+    rel = {"tag_name": "v99.0.0", "html_url": "https://github.com/x/y/releases/tag/v99.0.0", "body": "Notes\n\nruntime: py3.13.18-qt6.12.0",
+           "assets": [{"name": "LTH-Overlays-99.0.0-update.zip", "browser_download_url": "https://e/u.zip"},
+                      {"name": "LTH-Overlays-99.0.0-update.zip.sha256", "browser_download_url": "https://e/u.sha"},
+                      {"name": "LTH-Overlays-99.0.0-win64.zip", "browser_download_url": "https://e/f.zip"}]}
+
+    class R(io.BytesIO):
+        headers = {}
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+    monkeypatch.setattr(U, "_get", lambda url, timeout=15.0: R(json.dumps(rel).encode()))
+    info = U.check_release("x/y")
+    assert info["version"] == "99.0.0" and info["zip_url"] and info["sha_url"] and info["runtime"] == "py3.13.18-qt6.12.0"
+    u = U.Updater(oapp)
+    u.repo = "x/y"
+    u.info = info
+    assert u.newer()
+    monkeypatch.setattr(U, "runtime_id", lambda: "py3.13.18-qt6.12.0")
+    assert not u.needs_full()
+    monkeypatch.setattr(U, "runtime_id", lambda: "py3.13.0-qt6.10.0")
+    assert u.needs_full()  # kitas Python / Qt - tik pilnas zip
+    assert U.parse_version("0.7.0") < U.parse_version("0.7.1") < U.parse_version("0.10.0")
+
+
+def test_widget_copies(oapp, qapp):
+    """Duplicate: kopija su savais nustatymais, išlieka config'e, ištrinama."""
+    from lth_overlays.registry import BY_NAME, WIDGETS
+    oapp.config.data["onboarding_done"] = True
+    oapp.config.widget("flags")["style"] = "led"
+    name = oapp.add_copy("flags")
+    assert name in BY_NAME and name in oapp.widgets and BY_NAME[name].base == "flags"
+    w = oapp.widgets[name]
+    assert w.NAME == name and w.cfg["style"] == "led" and w.cfg is not oapp.config.widget("flags")
+    w.cfg["style"] = "tile"
+    assert oapp.config.widget("flags")["style"] == "led"
+    assert any(c["name"] == name for c in oapp.config.data["copies"])
+    oapp.open_control_center()
+    oapp.control.refresh_widget_list()
+    oapp.control.open_widget(name)
+    qapp.processEvents()
+    oapp.remove_copy(name)
+    assert name not in BY_NAME and name not in oapp.widgets and all(s.name != name for s in WIDGETS)
+    oapp.control.hide()
+
+
+def test_lap_history_and_last_laps_column(oapp):
+    # ratų istorija kaupiama momentinėse nuotraukose (programoje - kelis kartus per sekundę)
+    sim = SimRace(n_cars=10, multiclass=False, max_cars=10, rain=False, events=False, record=False)
+    engine = TimingEngine()
+    engine.set_session(sim.model)
+    for i in range(60 * 300):
+        engine.update(sim.step())
+        if i % 30 == 0:
+            engine.snapshot()
+    snap = engine.snapshot()
+    with_hist = [r for r in snap.cars if len(r.recent) >= 2]
+    assert with_hist, "cars should have a lap history after 6 minutes"
+    r = with_hist[0]
+    assert all(t > 0 for t, _ in r.recent)
+    assert abs(r.recent[-1][0] - r.last_lap) < 0.01
+    w = oapp.widgets["standings"]
+    for style in ("delta", "squares", "times"):
+        w.cfg["laps_style"] = style
+        cell = w.laps_cell("laps", r, snap)
+        assert cell[0] == "laps" and len(cell[1]) == 5
+    w.cfg["columns"] = dict(w.cfg.get("columns") or {}, laps=True)
+    w.push(snap, force=True)
+    assert "laps" in w._cols
+    rel = oapp.widgets["relative"]
+    rel.cfg["columns"] = dict(rel.cfg.get("columns") or {}, laps=True, leadergap=True, pitstops=True)
+    rel.push(snap, force=True)
+    assert not rel.grab().isNull()
+
+
+def test_track_map_partial_and_demo_spa(engine):
+    from lth_timing.trackmap import bundled
+    pts = bundled("spa")
+    assert pts is not None and pts.shape == (400, 2)
+    tm = engine.trackmap
+    assert tm.points is not None  # 6 min. sim - žemėlapis įrašytas
+
+
+def test_system_stats_and_wheel_guard(qapp):
+    from lth_overlays.win32 import SystemStats
+    s = SystemStats()
+    s.cpu()
+    r = s.ram()
+    assert r is None or (r[1] > 0 and 0 <= r[2] <= 100)
+    from PySide6.QtCore import QPointF, QPoint, Qt
+    from PySide6.QtGui import QWheelEvent
+    from PySide6.QtWidgets import QScrollArea, QSlider, QVBoxLayout, QWidget
+    from lth_overlays.control.components import WheelGuard
+    WheelGuard.install(qapp)
+    sa = QScrollArea()
+    inner = QWidget()
+    lay = QVBoxLayout(inner)
+    sl = QSlider(Qt.Orientation.Horizontal)
+    sl.setRange(0, 100)
+    sl.setValue(50)
+    lay.addWidget(sl)
+    for _ in range(40):
+        lay.addWidget(QSlider(Qt.Orientation.Horizontal))
+    sa.setWidget(inner)
+    sa.resize(300, 200)
+    sa.show()
+    qapp.processEvents()
+    ev = QWheelEvent(QPointF(10, 5), QPointF(10, 5), QPoint(0, 0), QPoint(0, -120), Qt.MouseButton.NoButton,
+                     Qt.KeyboardModifier.NoModifier, Qt.ScrollPhase.NoScrollPhase, False)
+    qapp.sendEvent(sl, ev)
+    assert sl.value() == 50  # nefokusuotas slideris nepasikeitė
+    sa.hide()

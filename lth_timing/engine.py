@@ -39,6 +39,8 @@ from .player import BLUE_GRACE_S, FLAG_BLUE, PlayerTracker
 from .sessioninfo import SessionModel
 from .rain_tips import RainCaller
 from .trackmap import TrackMap
+
+LAP_HIST = 10  # kiek paskutinių ratų laikom kiekvienai mašinai
 from .weather import WeatherTracker
 
 POINT_SPACING_M = 50.0
@@ -90,6 +92,9 @@ class CarRow:
     lic_color: int = -1
     car_short: str = ""
     flag_bits: int = 0  # CarIdxSessionFlags: mėlyna, juoda, meatball...
+    recent: tuple = ()  # paskutiniai ratai ((laikas, boksai), ...) seniausias pirmas
+    last_stop: tuple | None = None  # (ratas, boksų kelyje s, stovėjo s)
+    pit_live: float = 0.0  # kiek s jau boksų kelyje (kol ten)
 
 
 @dataclass
@@ -120,7 +125,8 @@ class Snapshot:
     me: int = -1
     on_track: bool = False
     replay: bool = False
-    in_garage: bool = False  # savo mašina garaže (ne stebime)
+    in_garage: bool = False  # ne savo mašinoje trasoje (garažo langas arba išlipus)
+    garage_screen: bool = False  # atidarytas iRacing garažo langas (IsInGarage)
     watching: bool = False  # kamera ant kitos mašinos (garaže / žiūrėjimas)
     multiclass: bool = False
     classes: dict = field(default_factory=dict)
@@ -201,6 +207,8 @@ class TimingEngine:
         self.best_seen = np.zeros(n)
         self.last_seen = np.zeros(n)
         self.laps_seen = np.zeros(n, dtype=np.int64)
+        self.lap_hist = {}  # idx -> [(ratas, laikas, boksai)] paskutiniai LAP_HIST ratų (Last 5 / 10 laps)
+        self._lap_pit = set()  # mašinos, kurios šio rato metu buvo boksų gatvėje
         self.start_class_pos = {}
         self.lap_pos = {}  # idx -> (lap, pos) paskutinio rato pradžioje
         self.pos_change_lap = {}
@@ -210,6 +218,8 @@ class TimingEngine:
         self._rows_cache = None
         self._derived = None
         self.pit_in = {}  # idx -> (progresas, laikas) įvažiuojant į boksus
+        self.pit_lap = {}  # idx -> ratas, kurio metu įvažiavo į boksus
+        self.last_stop = {}  # idx -> (ratas, laikas boksų kelyje s, stovėjo s) - paskutinis sustojimas
         self.pit_stationary = np.zeros(n)  # kiek s stovėjo boksuose šio sustojimo metu
         self.pit_losses = []  # (klasė, viso nuostolis, boksų tako nuostolis)
         self._prev_proc_t = None
@@ -285,11 +295,18 @@ class TimingEngine:
             exited = self.on_pit & ~on_pit
             for c in np.nonzero(exited)[0]:
                 self.pit_exit_lap[c] = self.lap_ctr[c]
+                st = self.pit_in.get(int(c))
+                if st is not None and math.isfinite(st[1]):
+                    lane_s = float(t - st[1])
+                    if 2.0 < lane_s < 1800.0:  # ne garažas / ne trūkis
+                        self.last_stop[int(c)] = (int(self.pit_lap.get(int(c), self.lap_ctr[c])), lane_s,
+                                                  float(self.pit_stationary[c]))
                 self._pit_loss(int(c), t)
             entered = ~self.on_pit & on_pit & self.known
             self.pit_stops[entered] += 1
             for c in np.nonzero(entered)[0]:
                 self.pit_in[int(c)] = (self.obs_prog[c], self.obs_t[c])
+                self.pit_lap[int(c)] = int(self.lap_ctr[c]) + 1  # ratas, kurio metu įvažiavo (1 = pirmas)
                 self.pit_stationary[c] = 0.0
             # stovėjimas boksuose: pozicija nesikeičia > 0,5 s
             if dt_proc > 0:
@@ -491,7 +508,9 @@ class TimingEngine:
         snap.replay = bool(f.IsReplayPlaying)
         snap.watching = self.is_watching(f, m)
         g = f.IsInGarage
-        snap.in_garage = bool(g) if g is not None else (not snap.on_track and not snap.replay)
+        # „garaže“ = ne savo mašinoje trasoje: garažo langas ARBA išlipus iš mašinos (žiūrint transliaciją)
+        snap.in_garage = bool(g) or (not snap.on_track and not snap.replay)
+        snap.garage_screen = bool(g)
         snap.session_type = m.session_type(f.SessionNum) if m else "race"
         snap.multiclass = bool(m and m.multiclass)
         snap.classes = m.classes if m else {}
@@ -516,7 +535,8 @@ class TimingEngine:
         if race:
             self._race_laps_left(snap, rows, f)
         tm = self.trackmap
-        snap.track_map = {"points": tm.points, "recording": tm.recording, "progress": tm.progress}
+        snap.track_map = {"points": tm.points, "recording": tm.recording, "progress": tm.progress,
+                          "partial": tm.partial() if tm.points is None else None}
         snap.track_name = m.track_name if m else ""
         snap.sectors = list(m.sectors) if m and m.sectors else [0.0, 1 / 3, 2 / 3]
         # SOF, sektorių palyginimas, boksų nuostoliai keičiasi retai - kartu su standings (~2 Hz)
@@ -713,9 +733,26 @@ class TimingEngine:
                 self.laps_seen[c] = max(int(self.laps_seen[c]), lp)
                 lp = int(self.laps_seen[c])
             r.last_lap, r.best_lap, r.laps = lv, bv, lp
+            if c < len(self.on_pit):
+                if self.on_pit[c]:
+                    self._lap_pit.add(c)
+                hist = self.lap_hist.setdefault(c, [])
+                # naujas ratas: ratų skaičius padidėjo IR atsinaujino paskutinio rato laikas
+                # (iRacing laiką kartais atnaujina kiek vėliau nei ratų skaičių)
+                if lv > 0 and lp > 0 and (not hist or (lp > hist[-1][0] and abs(lv - hist[-1][1]) > 1e-4)):
+                    hist.append((lp, lv, c in self._lap_pit))
+                    self._lap_pit.discard(c)
+                    if self.on_pit[c]:
+                        self._lap_pit.add(c)
+                    del hist[:-LAP_HIST]
+                r.recent = tuple((t, pit) for _, t, pit in hist)
             r.progress = float(prog_est[c]) if np.isfinite(prog_est[c]) else -1.0
             r.in_pit = bool(self.on_pit[c])
             r.pit_stops = int(self.pit_stops[c])
+            r.last_stop = self.last_stop.get(c)
+            st = self.pit_in.get(c) if self.on_pit[c] else None
+            r.pit_live = float(max(0.0, self._prev_proc_t - st[1])) if st is not None and self._prev_proc_t and \
+                math.isfinite(st[1]) else 0.0
             r.laps_since_pit = int(self.lap_ctr[c] - self.pit_exit_lap[c]) if self.pit_exit_lap[c] >= 0 else None
             r.stale = bool(stale[c])
             r.tire = int(tires[c]) if tires is not None else 0

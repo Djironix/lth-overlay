@@ -56,6 +56,9 @@ class TrackMapWidget(PanelWidget):
     def content_key(self, snap):
         tm = snap.track_map or {}
         pts = tm.get("points")
+        real = pts is not None
+        if pts is None and tm.get("partial") is not None:
+            pts = tm["partial"]  # įrašinėjama - rodom jau nubrėžtą dalį, ne apskritimą
         cars = []
         live = snap.car_pct  # šio kadro padėtys (standings atsinaujina tik ~2 Hz)
         n_live = len(live) if live is not None else 0
@@ -80,7 +83,7 @@ class TrackMapWidget(PanelWidget):
                     extra[r.idx] = (blue, fc)
         self._extra = extra
         ex_key = tuple(sorted(extra.items()))
-        rec = None if pts is not None else (bool(tm.get("recording")), round(float(tm.get("progress", 0.0)), 2))
+        rec = None if real else (bool(tm.get("recording")), round(float(tm.get("progress", 0.0)), 2))
         self._meta = tuple((c[0], c[2], c[3], c[4], c[5], c[6]) for c in cars)
         if self.fast_active() and self._view is not None:  # padėtis atnaujina fast_tick
             self._view = (pts, self._view[1] if self._view[1] else tuple(cars), rec, tuple(snap.sectors or ()))
@@ -104,7 +107,7 @@ class TrackMapWidget(PanelWidget):
             a = math.radians(rot)
             c, s = math.cos(a), math.sin(a)
             xy = xy @ np.array([[c, s], [-s, c]])
-        lo, hi = xy.min(axis=0), xy.max(axis=0)
+        lo, hi = np.nanmin(xy, axis=0), np.nanmax(xy, axis=0)
         span = max(float((hi - lo).max()), 1e-6)
         size = min(rect.width(), rect.height())
         k = size / span
@@ -125,10 +128,23 @@ class TrackMapWidget(PanelWidget):
             xy = self._transform(base, rect)
         else:
             xy = self._transform(np.asarray(pts, dtype=float), rect)
-        path = QPainterPath(QPointF(*xy[0]))
-        for x, y in xy[1:]:
-            path.lineTo(x, y)
-        path.closeSubpath()
+        if np.isnan(xy[:, 0]).any():  # dalinis (įrašinėjamas) - tik nubrėžtos atkarpos
+            path = QPainterPath()
+            pen_down = False
+            for x, y in xy:
+                if math.isnan(x):
+                    pen_down = False
+                    continue
+                if pen_down:
+                    path.lineTo(x, y)
+                else:
+                    path.moveTo(x, y)
+                    pen_down = True
+        else:
+            path = QPainterPath(QPointF(*xy[0]))
+            for x, y in xy[1:]:
+                path.lineTo(x, y)
+            path.closeSubpath()
         self._path = (key, path, xy)
         return path, xy
 
@@ -187,13 +203,16 @@ class TrackMapWidget(PanelWidget):
         p.setPen(QPen(QColor(0, 0, 0, 150), 7 * sc, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
                       Qt.PenJoinStyle.RoundJoin))
         p.drawPath(path)
-        p.setPen(QPen(QColor(220, 220, 225, 210 if pts is not None else 90), 3.2 * sc, Qt.PenStyle.SolidLine,
+        p.setPen(QPen(QColor(220, 220, 225, 210 if rec is None else (150 if pts is not None else 90)), 3.2 * sc,
+                      Qt.PenStyle.SolidLine,
                       Qt.PenCapStyle.RoundCap, Qt.PenJoinStyle.RoundJoin))
         p.drawPath(path)
         # starto / finišo linija ir sektoriai
         for i, s in enumerate(sectors or (0.0,)):
             a = self._at(xy, s)
             b = self._at(xy, s + 0.004)
+            if math.isnan(a.x()) or math.isnan(b.x()):
+                continue
             dx, dy = b.x() - a.x(), b.y() - a.y()
             n = math.hypot(dx, dy) or 1.0
             nx, ny = -dy / n * 7 * sc, dx / n * 7 * sc
@@ -247,6 +266,8 @@ class TrackMapWidget(PanelWidget):
         extra = getattr(self, "_extra", {})
         for idx, prog, color, number, me, in_pit, leader in cars:
             c = self._at(xy, prog)
+            if math.isnan(c.x()):  # trasos dalis dar neįrašyta
+                continue
             ex = extra.get(idx)
             col = QColor(ex[1]) if ex and ex[1] else (QColor(pal.class_color(color)) if color else QColor(pal.text))
             if in_pit:

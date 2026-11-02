@@ -28,6 +28,16 @@ Atnaujinta: 2026-10-28 · Dabartinė versija: **v0.6.0** · Toliau: Windows pati
 
 ---
 
+## 0.000 v0.7.0 — GitHub atnaujinimai, kopijos, Šymkos atsiliepimai
+- Atnaujinimai: `lth_overlays/updater.py` (GitHub Releases API, `data/update.json` -> repo), `lth_boot.py`
+  (pritaiko zip prieš importą, `_prev` atsarginė, rollback), `run.py` atnaujinimų metu nekeičiamas.
+  Build: `*-update.zip` + `.sha256`, `runtime.txt` (py+qt žymė; skiriasi -> reikia pilno zip).
+  `.github/workflows/release.yml` (tag v* -> testai -> build -> Release). Instrukcija: docs/GITHUB-RELEASES.md.
+- Valdiklių kopijos: `registry.add_copy/remove_copy`, `config.data["copies"]`, dinaminė klasė su NAME.
+- Setups funkcija ištrinta (vartotojo sprendimas).
+- CPU: `_BgWorker` (rato failai fone), `_spike_check` -> perf_spikes.log, `gc.freeze()` po ~20 s,
+  `win32.set_low_priority` (config `low_priority`, numatyta True).
+
 ## 0.00 v0.6.2–0.6.3 — Dashboard ir naujas Control Center (GoFast stilius, A variantas)
 - 0.6.2: Overview dashboard (`control/overview_page.py`, `sessions.stats`), Records, Setups (`setups.py`),
   automatinis sesijų saugojimas (`sessions.py`), pranešimai (`ctx.notify`), telemetrijos zoom, GT3 vairas.

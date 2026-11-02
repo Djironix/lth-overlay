@@ -18,8 +18,8 @@ class StandingsWidget(TableWidget):
     MIN_WIDTH = 220
     HEIGHT_MODE = "rows"
     WIDTHS = {"classbar": 0.01, "pos": 1.6, "change": 0.9, "number": 2.2, "flag": 1.45, "brand": 2.3, "name": None,
-              "carname": 6.5, "gap": 3.4, "interval": 3.2, "last": 4.0, "best": 4.0, "start": 1.9, "irating": 2.3, "irchange": 2.2,
-              "license": 2.0, "pit": 2.4, "tire": 1.2}
+              "carname": 6.5, "gap": 3.4, "interval": 3.2, "last": 4.0, "best": 4.0, "start": 1.9, "irating": 2.8, "irchange": 2.2,
+              "license": 2.0, "pit": 2.4, "tire": 1.2, "pitstops": 1.6, "lapsdone": 2.0, "laps": 11.5, "delta": 2.9}
 
     def __init__(self, ctx):
         self._rows = []
@@ -34,7 +34,10 @@ class StandingsWidget(TableWidget):
     def content_key(self, snap):
         c = self.cfg
         cols = ordered_columns(c, STANDINGS_COLUMNS)
-        self.WIDTHS = dict(type(self).WIDTHS, license=3.6 if c.get("license_style") == "full" else 2.0)
+        self.WIDTHS = dict(type(self).WIDTHS, license=3.6 if c.get("license_style") == "full" else 2.0,
+                           laps=self.laps_width(), brand=2.9 if c.get("brand_style", "logo") == "logo" else 2.3,
+                           pit=self.pit_width())
+        self._rel = {rr.idx: rr for rr in snap.relative}
         self._cols = ["classbar"] + cols
         self._footer = self.footer_info(snap)
         self._friends = self.ctx.config.friends()
@@ -214,18 +217,23 @@ class StandingsWidget(TableWidget):
                 ch = r.pos_change_start if race else 0
                 cells.append(Cell(k, f"{ch:+d}" if ch else "", fg="good" if ch > 0 else "bad", align=RIGHT, font="small"))
             elif k == "irating":
-                cells.append(Cell(k, irating_text(r.irating), fg="dim", align=RIGHT, font="small"))
+                cells.append(self.irating_cell(k, r))
             elif k == "irchange":
                 cells.append(self.irchange_cell(k, r, snap))
             elif k == "license":
                 cells.append(self.license_cell(k, r))
             elif k == "pit":
-                st = self.status_cell(k, r, race)
-                if not st[1] and race and r.laps_since_pit is not None:
-                    st = Cell(k, f"{r.laps_since_pit}", fg="dim", align=CENTER, font="small")
-                cells.append(st)
+                cells.append(self.pit_cell(k, r, race))
+            elif k == "delta":
+                cells.append(self.delta_cell(self._rel.get(r.idx)))
             elif k == "tire":
                 cells.append(Cell(k, "W" if r.tire == 1 else "", fg="blue", align=CENTER, font="tiny"))
+            elif k == "pitstops":
+                cells.append(Cell(k, str(r.pit_stops) if r.pit_stops else "", fg="dim", align=CENTER, font="small"))
+            elif k == "lapsdone":
+                cells.append(Cell(k, str(r.laps) if r.laps else "", fg="dim", align=RIGHT, font="small"))
+            elif k == "laps":
+                cells.append(self.laps_cell(k, r, snap))
         flags = ("me",) if r.is_me else (("friend",) if self._friends.get(r.user_id) else ())
         if race and r.flag_bits & 0x20 and c.get("blue_rows", True):
             flags = flags + ("blue",)

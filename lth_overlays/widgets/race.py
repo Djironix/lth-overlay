@@ -20,16 +20,7 @@ class FlagsWidget(PanelWidget):
     HAS_HEADER = False
     MIN_WIDTH = 160
     # (fonas, tekstas) - None = paletės spalva
-    STYLE = {
-        "disqualify": ((10, 10, 10), (255, 255, 255)), "black": ((10, 10, 10), (255, 255, 255)),
-        "repair": ((10, 10, 10), (255, 150, 40)), "red": ((215, 30, 40), (255, 255, 255)),
-        "caution_waving": ((250, 205, 20), (20, 20, 20)), "caution": ((250, 205, 20), (20, 20, 20)),
-        "yellow_waving": ((250, 205, 20), (20, 20, 20)), "yellow": ((250, 205, 20), (20, 20, 20)),
-        "debris": ((250, 205, 20), (180, 30, 30)), "blue": ((30, 110, 230), (255, 255, 255)),
-        "white": ((245, 245, 245), (20, 20, 20)), "checkered": ((245, 245, 245), (10, 10, 10)),
-        "one_to_green": ((40, 170, 80), (255, 255, 255)), "green": ((40, 170, 80), (255, 255, 255)),
-        "formation": ((40, 44, 52), (255, 255, 255)),
-    }
+    from ..flags import RACE_FLAG_STYLE as STYLE  # (fonas, tekstas)
     # vėliavos, kurios trumpos (mirksi) - jas laikome bent `hold` sekundžių
     SHORT = {"blue", "yellow", "yellow_waving", "debris", "black", "repair"}
 
@@ -42,11 +33,21 @@ class FlagsWidget(PanelWidget):
         t = snap.t
         hold = float(self.cfg.get("hold", 4.0))
         active = {k: txt for k, txt in (p.flags if p is not None else ())}
-        if "blue" in active and not self._blue_is_real(snap):
+        if "blue" in active and snap.session_type != "race" and not self.cfg.get("blue_outside_race"):
             del active["blue"]
-        if p is not None and 0 <= p.pace_mode <= 3 and not any(k in active for k in ("one_to_green", "caution",
-                                                                                    "caution_waving", "red")):
+        elif "blue" in active and self.cfg.get("blue_strict", False) and not self._blue_is_real(snap):
+            del active["blue"]
+        if "blue" not in active and self._blue_is_real(snap) and snap.session_type == "race" \
+                and self.cfg.get("blue_early", True):
+            active["blue"] = "BLUE FLAG"  # greitesnė mašina jau visai čia - prieš iRacing vėliavą
+        # formuotės ratas - tik kol sesija tikrai „parade laps“ (PaceMode iRacing kartais lieka visą lenktynę)
+        from lth_timing.frame import STATE_PARADE
+        if snap.session_state == STATE_PARADE and not any(k in active for k in ("one_to_green", "caution",
+                                                                                 "caution_waving", "red")):
             active["formation"] = "FORMATION LAP"
+        if not self.cfg.get("show_green"):  # žalia / „one to green“ / formuotė - tik įjungus
+            for k in ("green", "one_to_green", "formation"):
+                active.pop(k, None)
         for k, txt in active.items():
             first = self._seen.get(k, (t, t, txt))[0]
             self._seen[k] = (first, t, txt)
@@ -69,13 +70,17 @@ class FlagsWidget(PanelWidget):
         if snap.session_type != "race":
             return bool(self.cfg.get("blue_outside_race"))
         me = next((r for r in snap.cars if r.is_me), None)
-        my_lap = (snap.classes.get(me.class_id, {}) or {}).get("est_lap") if me is not None else None
+        cls = snap.classes or {}
+        my_lap = (cls.get(me.class_id, {}) or {}).get("est_lap") if me is not None else None
+        if me is not None and not my_lap and me.best_lap > 0:
+            my_lap = me.best_lap
+        window = float(self.cfg.get("blue_window", 1.5))
         for r in snap.relative:
-            if r.is_me or not (-3.5 <= r.gap < 0):
+            if r.is_me or not (-window <= r.gap < 0) or r.car.status != "track":
                 continue
             if r.lap_rel > 0:
                 return True
-            other = (snap.classes.get(r.car.class_id, {}) or {}).get("est_lap")
+            other = (cls.get(r.car.class_id, {}) or {}).get("est_lap") or (r.car.best_lap if r.car.best_lap > 0 else None)
             if me is not None and r.car.class_id != me.class_id and other and my_lap and other < my_lap * 0.99:
                 return True
         return False
@@ -86,16 +91,150 @@ class FlagsWidget(PanelWidget):
                  "debris", "blue", "white", "checkered", "one_to_green", "formation", "green")
         return order.index(key) if key in order else 99
 
+    # filtras kopijoms: kokias vėliavas rodo šis valdiklis
+    GROUPS = {"yellow": ("caution_waving", "caution", "yellow_waving", "yellow", "debris"), "blue": ("blue",),
+              "black": ("disqualify", "black", "repair"), "red": ("red",), "white": ("white",),
+              "checkered": ("checkered",), "start": ("one_to_green", "green", "formation")}
+
+    def _allowed(self, key) -> bool:
+        only = self.cfg.get("only") or {}
+        for g, keys in self.GROUPS.items():
+            if key in keys:
+                return only.get(g, True) is not False
+        return True
+
     def desired_height(self) -> int:
+        st = self.cfg.get("style", "banner")
+        if st in ("tile", "light", "wave", "led"):
+            return int(self.width() * (1.0 if st != "light" else 0.82) +
+                       (self.fonts.em_small * 1.7 if self.cfg.get("label", True) else 0))
+        if st == "strip":
+            return int(self.fonts.em_base * 0.9)
         return int(self.fonts.em_base * 2.8)
 
     def paint_content(self, p: QPainter):
         view = self._view
+        if view is not None and not self._allowed(view[0]):
+            view = None
         if view is None:
             if not self.editing:
                 return
             view = ("yellow", "YELLOW")
         key, txt = view
+        st = self.cfg.get("style", "banner")
+        if st == "banner":
+            self._paint_banner(p, key, txt)
+            return
+        r = QRectF(self.rect())
+        rad = self.pal.radius
+        self._drew_bg = True
+        lab_h = self.fonts.em_small * 1.7 if self.cfg.get("label", True) and st != "strip" else 0.0
+        if st == "strip":
+            bg, _fg = self.STYLE.get(key, ((60, 60, 60), (255, 255, 255)))
+            self._cloth(p, r, key, 0.0, rad)
+            return
+        # plytelė / lemputė / plazdanti vėliava: tamsus pagrindas, vėliava viduje, užrašas apačioje
+        p.setPen(Qt.PenStyle.NoPen)
+        p.setBrush(self.pal.bg)
+        p.drawRoundedRect(r, rad, rad)
+        area = QRectF(r.x(), r.y(), r.width(), r.height() - lab_h)
+        m = min(area.width(), area.height()) * 0.12
+        inner = area.adjusted(m, m, -m, -m)
+        if st == "tile":
+            self._cloth(p, inner, key, 0.0, max(2.0, rad * 0.7))
+        elif st == "led":
+            side = min(area.width(), area.height()) * 0.94
+            box = QRectF(area.center().x() - side / 2, area.center().y() - side / 2, side, side)
+            p.drawPixmap(box.topLeft(), self._led_panel(key, side))
+        elif st == "wave":
+            pole = QRectF(inner.x(), inner.y(), max(2.0, inner.width() * 0.035), inner.height())
+            p.setBrush(QColor(200, 200, 205))
+            p.drawRoundedRect(pole, 1.5, 1.5)
+            cloth = QRectF(pole.right() + 1, inner.y() + inner.height() * 0.04, inner.width() - pole.width() - 1,
+                           inner.height() * 0.62)
+            self._cloth(p, cloth, key, cloth.height() * 0.09, 0.0)
+        else:  # light - kaip trasos šviesų panelis
+            bg, _fg = self.STYLE.get(key, ((60, 60, 60), (255, 255, 255)))
+            col = QColor(*bg) if key not in ("black", "disqualify") else QColor(240, 240, 240)
+            if key == "repair":
+                col = QColor(255, 120, 20)
+            d = min(inner.width(), inner.height())
+            c = inner.center()
+            from PySide6.QtGui import QRadialGradient
+            for k, a in ((1.0, 40), (0.82, 70)):
+                g = QColor(col)
+                g.setAlpha(a)
+                p.setBrush(g)
+                p.drawEllipse(c, d / 2 * k, d / 2 * k)
+            rg = QRadialGradient(c, d * 0.36)
+            rg.setColorAt(0.0, col.lighter(150))
+            rg.setColorAt(0.75, col)
+            rg.setColorAt(1.0, col.darker(130))
+            p.setBrush(rg)
+            p.drawEllipse(c, d * 0.34, d * 0.34)
+            if key == "checkered":
+                self._cloth(p, QRectF(c.x() - d * 0.24, c.y() - d * 0.24, d * 0.48, d * 0.48), key, 0.0, d * 0.24)
+        if lab_h:
+            p.setPen(self.pal.text)
+            self.draw_text(p, QRectF(r.x() + 4, r.bottom() - lab_h - 2, r.width() - 8, lab_h), txt, "small", "c")
+
+    def _led_panel(self, key, side: float):
+        """Trasos LED skydas: taškų matrica (vėliavos raštas), užgesę taškai pilki. Paruošiama vieną kartą."""
+        dpr = self.devicePixelRatioF()
+        ck = (key, round(side, 1), dpr)
+        cache = self.__dict__.setdefault("_led_cache", {})
+        pm = cache.get(ck)
+        if pm is not None:
+            return pm
+        from PySide6.QtGui import QImage, QPixmap
+        n = 22
+        img = QImage(n, n, QImage.Format.Format_ARGB32)
+        img.fill(QColor(0, 0, 0))
+        q = QPainter(img)
+        self._cloth(q, QRectF(0, 0, n, n), key, 0.0, 0.0)
+        q.end()
+        pm = QPixmap(int(side * dpr), int(side * dpr))
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.GlobalColor.transparent)
+        q = QPainter(pm)
+        q.setRenderHint(QPainter.RenderHint.Antialiasing)
+        q.setPen(Qt.PenStyle.NoPen)
+        q.setBrush(QColor(14, 14, 16))
+        q.drawRoundedRect(QRectF(0, 0, side, side), side * 0.05, side * 0.05)
+        m = side * 0.05
+        step = (side - 2 * m) / n
+        rad = step * 0.36
+        dark = key in ("black", "disqualify")
+        for j in range(n):
+            for i in range(n):
+                c = QColor(img.pixel(i, j))
+                border = i in (0, n - 1) or j in (0, n - 1)
+                if dark and border:
+                    c = QColor(245, 245, 245)
+                lum = 0.299 * c.red() + 0.587 * c.green() + 0.114 * c.blue()
+                if lum < 40:
+                    c = QColor(46, 46, 50)  # užgesęs taškas
+                else:
+                    c = c.lighter(115)
+                cx, cy = m + (i + 0.5) * step, m + (j + 0.5) * step
+                if lum >= 40:
+                    glow = QColor(c)
+                    glow.setAlpha(60)
+                    q.setBrush(glow)
+                    q.drawEllipse(QPointF(cx, cy), rad * 1.45, rad * 1.45)
+                q.setBrush(c)
+                q.drawEllipse(QPointF(cx, cy), rad, rad)
+        q.end()
+        if len(cache) > 40:
+            cache.clear()
+        cache[ck] = pm
+        return pm
+
+    def _cloth(self, p, r: QRectF, key, wave: float, rad: float):
+        from ..flags import paint_race_flag
+        paint_race_flag(p, r, key, wave, rad)
+
+    def _paint_banner(self, p: QPainter, key, txt):
         bg, fg = self.STYLE.get(key, ((60, 60, 60), (255, 255, 255)))
         r = QRectF(self.rect())
         rad = self.pal.radius
@@ -150,10 +289,18 @@ class RadarWidget(PanelWidget):
         lr = p.car_left_right if p is not None else 0
         left, right = self.SIDES.get(lr, (0, 0))
         busy = bool(cars) or left or right
+        if self.cfg.get("style", "radar") in ("bars", "arrows"):
+            side = self.cfg.get("side", "both")
+            busy = bool((left and side != "right") or (right and side != "left"))
         self._view = (tuple(sorted(cars)), left, right, rng) if (busy or self.cfg.get("always")) else None
         return (self._view, self.width(), self.height())
 
     def desired_height(self) -> int:
+        st = self.cfg.get("style", "radar")
+        if st == "bars":
+            return int(self.width() * (0.9 if self.cfg.get("side", "both") == "both" else 3.0))
+        if st == "arrows":
+            return int(self.width() * (0.45 if self.cfg.get("side", "both") == "both" else 1.0))
         return int(self.width() * 1.3)
 
     def paint_content(self, p: QPainter):
@@ -162,6 +309,10 @@ class RadarWidget(PanelWidget):
             if not self.editing:
                 return
             view = ((-6.0, 12.0), 1, 0, float(self.cfg.get("range", 20)))
+        st = self.cfg.get("style", "radar")
+        if st in ("bars", "arrows"):
+            self._paint_blindspot(p, view, st)
+            return
         cars, left, right, rng = view
         r = QRectF(self.rect())
         pal = self.pal
@@ -182,7 +333,10 @@ class RadarWidget(PanelWidget):
                 for s in (-1, 1):
                     y = cy - s * m * k
                     p.drawLine(QPointF(r.left() + 6, y), QPointF(r.right() - 6, y))
-        # šonų įspėjimai
+        # šonų įspėjimai: mašina šone pastumta tiek, kiek ji išlindusi į priekį / atsilikusi (kaip spotteris)
+        near = min(cars, key=abs) if cars else 0.0
+        if abs(near) > CAR_LEN_M * 1.3:
+            near = 0.0
         for side, n in ((-1, left), (1, right)):
             if n:
                 col = QColor(pal.bad)
@@ -191,7 +345,13 @@ class RadarWidget(PanelWidget):
                 p.setBrush(col)
                 x = cx + side * lane - cw / 2
                 for i in range(n):
-                    p.drawRoundedRect(QRectF(x + side * i * lane, cy - ch / 2, cw, ch), 3, 3)
+                    p.drawRoundedRect(QRectF(x + side * i * lane, cy - near * k - ch / 2, cw, ch), 3, 3)
+                if self.cfg.get("overlap_text", True) and abs(near) >= 0.5:
+                    p.setPen(pal.text)
+                    tx = x + side * lane * (n - 1) + (cw + 4 if side > 0 else -40)
+                    self.draw_text(p, QRectF(tx, cy - near * k - 8, 36, 16),
+                                   f"{abs(near):.1f}", "tiny", "l" if side > 0 else "r")
+                    p.setPen(Qt.PenStyle.NoPen)
         # kitos mašinos (pagal atstumą; šoninės padėties iRacing neduoda)
         for d in cars:
             near = abs(d) < CAR_LEN_M
@@ -211,6 +371,75 @@ class RadarWidget(PanelWidget):
                 p.setPen(pal.dim)
                 self.draw_text(p, QRectF(4, r.height() - self.lh(), r.width() - 8, self.lh()),
                                f"{abs(closest):.0f} m {'ahead' if closest > 0 else 'behind'}", "tiny", "c")
+
+
+    def _paint_blindspot(self, p: QPainter, view, st):
+        """Akla zona: šoninės juostos arba rodyklės. Juostoje mašinos blokas juda pagal tai, kiek ji priekyje / gale
+        (iRacing duoda tik „kairėje / dešinėje“, o atstumą išilgai - artimiausia mašina iš relative)."""
+        cars, left, right, _rng = view
+        r = QRectF(self.rect())
+        pal = self.pal
+        self._drew_bg = True
+        side = self.cfg.get("side", "both")
+        sides = [s_ for s_ in (-1, 1) if (side == "both" or (side == "left") == (s_ < 0))]
+        near = min(cars, key=abs) if cars else 0.0
+        if abs(near) > CAR_LEN_M * 1.3:
+            near = 0.0
+        p.setPen(Qt.PenStyle.NoPen)
+        for s_ in sides:
+            n = left if s_ < 0 else right
+            if len(sides) == 2:
+                box = QRectF(r.x(), r.y(), r.width() * 0.34, r.height()) if s_ < 0 else \
+                    QRectF(r.right() - r.width() * 0.34, r.y(), r.width() * 0.34, r.height())
+            else:
+                box = QRectF(r)
+            col = QColor(pal.bad if n else pal.dim)
+            if st == "bars":
+                track = QColor(pal.bg)
+                p.setBrush(track)
+                rad = min(box.width(), box.height()) * 0.3
+                p.drawRoundedRect(box, rad, rad)
+                inner = box.adjusted(box.width() * 0.18, box.width() * 0.18, -box.width() * 0.18, -box.width() * 0.18)
+                if n:
+                    from PySide6.QtGui import QLinearGradient
+                    g = QLinearGradient(inner.topLeft(), inner.bottomLeft())
+                    c1, c2 = QColor(col), QColor(col)
+                    c1.setAlpha(60)
+                    c2.setAlpha(60)
+                    mid = QColor(col)
+                    mid.setAlpha(235 if n > 1 else 190)
+                    g.setColorAt(0.0, c1)
+                    g.setColorAt(0.5, mid)
+                    g.setColorAt(1.0, c2)
+                    p.setBrush(g)
+                    p.drawRoundedRect(inner, rad * 0.6, rad * 0.6)
+                    # mašinos blokas: kiek ji priekyje (+) / gale (-)
+                    k = inner.height() / (CAR_LEN_M * 3)
+                    ch = CAR_LEN_M * k
+                    cy = inner.center().y() - near * k
+                    p.setBrush(QColor(255, 255, 255, 230))
+                    p.drawRoundedRect(QRectF(inner.x() + inner.width() * 0.15, cy - ch / 2, inner.width() * 0.7, ch),
+                                      3, 3)
+                else:
+                    idle = QColor(pal.dim)
+                    idle.setAlpha(45)
+                    p.setBrush(idle)
+                    p.drawRoundedRect(inner, rad * 0.6, rad * 0.6)
+            else:  # arrows - rodyklės
+                if not n:
+                    col.setAlpha(60)
+                cx, cy = box.center().x(), box.center().y()
+                h = min(box.height(), box.width() * 1.4) * 0.8
+                w = h * 0.55
+                for i in range(2 if n > 1 else 1):
+                    off = i * w * 0.7 * s_
+                    poly = [QPointF(cx + off - s_ * w / 2, cy - h / 2), QPointF(cx + off + s_ * w / 2, cy),
+                            QPointF(cx + off - s_ * w / 2, cy + h / 2)]
+                    pen = QPen(col, max(3.0, h * 0.16), Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap,
+                               Qt.PenJoinStyle.RoundJoin)
+                    p.setPen(pen)
+                    p.drawPolyline(poly)
+                p.setPen(Qt.PenStyle.NoPen)
 
 
 # ---------------------------------------------------------------- Pit helper
@@ -355,15 +584,25 @@ class IncidentsWidget(PanelWidget):
     TITLE = "Incidents"
     MIN_WIDTH = 140
 
+    def wants_visible(self, snap) -> bool:
+        if not super().wants_visible(snap):
+            return False
+        if self.cfg.get("display", "always") != "popup" or self.editing or snap is None:
+            return True
+        p = snap.player
+        return bool(p is not None and p.valid and p.inc_last_add > 0 and p.inc_age < float(self.cfg.get("popup", 5.0)))
+
     def content_key(self, snap):
         p = snap.player
-        if p is None or not p.valid:
-            self._view = None
-            return None
         limit = int(self.cfg.get("limit", 0) or 0) or int(getattr(snap, "incident_limit", 0) or 0)
+        if p is None or not p.valid:  # garaže / kol neprisijungęs - paskutinis žinomas skaičius
+            last = getattr(self, "_last_inc", (0, None))
+            self._view = (last[0], last[1], limit, 0)
+            return (self._view, self.width())
         popup = float(self.cfg.get("popup", 5.0))
         fresh = p.inc_last_add if p.inc_age < popup and p.inc_last_add > 0 else 0
         team = p.inc_team if p.inc_team and p.inc_team != p.inc_my else None
+        self._last_inc = (p.inc_my, team)
         self._view = (p.inc_my, team, limit, fresh)
         return (self._view, self.width())
 

@@ -3,4 +3,4 @@
 Bendras paketas LTH Overlays ir LTH Spectate programoms.
 """
 
-VERSION = "0.6.4"
+VERSION = "0.7.0"

@@ -5,7 +5,7 @@ import os
 import re
 import sys
 
-from PySide6.QtCore import QRectF, QSize, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QDesktopServices, QFont, QKeySequence, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (QFileDialog, QFrame, QGridLayout, QHBoxLayout, QInputDialog, QKeySequenceEdit,
                                QLabel, QLineEdit, QMessageBox, QPlainTextEdit, QScrollArea, QVBoxLayout, QWidget)
@@ -302,11 +302,7 @@ class WidgetsPage(Page):
         self.content.addLayout(bar)
         self.grid = FlowGrid(290, 14)
         self.cards = {}
-        for spec in WIDGETS:
-            c = WidgetCard(self.ctx, spec)
-            c.clicked.connect(center.open_widget)
-            self.cards[spec.name] = c
-        self.grid.set_items(list(self.cards.values()))
+        self.sync_cards()
         self.content.addWidget(self.grid)
         self.empty = label("No widgets match.", "muted")
         self.empty.hide()
@@ -316,6 +312,24 @@ class WidgetsPage(Page):
         self._timer = QTimer(self)
         self._timer.setInterval(15)
         self._timer.timeout.connect(self._next_thumb)
+
+    def sync_cards(self):
+        """Kortelės pagal registrą (pridėtos / ištrintos kopijos)."""
+        from ..registry import ordered_specs
+        specs = ordered_specs()
+        names = [sp.name for sp in specs]
+        for n in list(self.cards):
+            if n not in names:
+                self.cards.pop(n).deleteLater()
+        new = {}
+        for sp in specs:
+            c = self.cards.get(sp.name)
+            if c is None:
+                c = WidgetCard(self.ctx, sp)
+                c.clicked.connect(self.center.open_widget)
+            new[sp.name] = c
+        self.cards = new
+        self.grid.set_items(list(self.cards.values()))
 
     def _filter(self, *_):
         q = self.search.text().strip().lower()
@@ -427,6 +441,16 @@ class WidgetDetailPage(Page):
         self.vis = Toggle(bool(self.cfg.get("visible")))
         self.vis.toggled.connect(lambda v: (self.ctx.set_widget_visible(name, v), self.form.refresh_geometry()))
         head.addLayout(vbox(label("Show", "faint"), self.vis, spacing=4))
+        from ..registry import NOT_COPYABLE
+        if name not in NOT_COPYABLE and (self.spec.base or name) not in NOT_COPYABLE:
+            dup = button("Duplicate", "ghost", "copy", "Add another copy of this widget with its own place and settings "
+                                                      "(e.g. two flag tiles on both sides of the screen)")
+            dup.clicked.connect(self._duplicate)
+            head.addWidget(dup, 0, Qt.AlignmentFlag.AlignVCenter)
+        if self.spec.base:
+            rm = button("Delete copy", "danger", "trash", "Remove this copy")
+            rm.clicked.connect(self._delete_copy)
+            head.addWidget(rm, 0, Qt.AlignmentFlag.AlignVCenter)
         reset = button("Reset", "danger", "reset", "Restore this widget's default settings")
         reset.clicked.connect(self._reset)
         head.addWidget(reset, 0, Qt.AlignmentFlag.AlignVCenter)
@@ -506,6 +530,21 @@ class WidgetDetailPage(Page):
             self.vis.set_silent(True)
         if not self.ctx.editing:
             self.ctx.toggle_edit()
+
+    def _duplicate(self):
+        new = self.ctx.add_copy(self.name)
+        self.center.refresh_widget_list()
+        self.center.open_widget(new)
+        self.center.toast(f"{BY_NAME[new].title} added - drag it where you want in edit mode")
+
+    def _delete_copy(self):
+        if QMessageBox.question(self, "Delete copy", f"Delete {self.spec.title}?") != QMessageBox.StandardButton.Yes:
+            return
+        name = self.name
+        self.center.go("widgets")
+        self.center.forget_widget_page(name)
+        self.ctx.remove_copy(name)
+        self.center.refresh_widget_list()
 
     def _reset(self):
         if QMessageBox.question(self, "Reset widget", f"Restore default settings for {self.spec.title}?") \
@@ -776,7 +815,22 @@ class ThemeCard(QWidget):
         bg = QColor(*t["bg"], int(255 * t["bg_alpha"]))
         rad = float(t.get("radius", 6))
         p.setBrush(bg)
-        p.drawRoundedRect(box, rad, rad)
+        shape = t.get("shape", "round")
+        if shape != "round":  # nukirsti kampai / pasvirę šonai - kaip valdikliuose
+            from PySide6.QtGui import QPainterPath, QPolygonF
+            c = 8.0
+            pts = ([QPointF(box.left() + c, box.top()), QPointF(box.right(), box.top()),
+                    QPointF(box.right(), box.bottom() - c), QPointF(box.right() - c, box.bottom()),
+                    QPointF(box.left(), box.bottom()), QPointF(box.left(), box.top() + c)] if shape == "chamfer" else
+                   [QPointF(box.left() + c, box.top()), QPointF(box.right(), box.top()),
+                    QPointF(box.right() - c, box.bottom()), QPointF(box.left(), box.bottom())])
+            clip = QPainterPath()
+            clip.addPolygon(QPolygonF(pts))
+            clip.closeSubpath()
+            p.setClipPath(clip)
+            p.drawRect(box)
+        else:
+            p.drawRoundedRect(box, rad, rad)
         hh = 14
         style = t.get("header_style", "marker" if t.get("lumina") else "line")
         hc = QColor(*t["header"])
@@ -795,6 +849,13 @@ class ThemeCard(QWidget):
             p.fillRect(QRectF(box.x(), box.y() + 3, 2, hh - 6), gg)
         elif style == "marker":
             p.fillRect(QRectF(box.x(), box.y() + 3, 2, hh - 6), acc)
+        elif style == "tab":
+            from PySide6.QtGui import QPolygonF
+            tw = box.width() * 0.45
+            p.setBrush(acc)
+            p.drawPolygon(QPolygonF([QPointF(box.x(), box.y()), QPointF(box.x() + tw, box.y()),
+                                     QPointF(box.x() + tw - 6, box.y() + hh), QPointF(box.x(), box.y() + hh)]))
+            p.fillRect(QRectF(box.x(), box.y() + hh - 2, box.width(), 2), acc)
         p.setBrush(QColor(*t["text"]) if style != "line" and style != "gold" else acc)
         p.drawRoundedRect(QRectF(box.x() + 7, box.y() + hh * 0.38, box.width() * 0.22, hh * 0.24), 1, 1)
         rows = 4
@@ -811,6 +872,7 @@ class ThemeCard(QWidget):
             p.drawRoundedRect(QRectF(box.x() + 22, y + rh * 0.38, box.width() * 0.38, rh * 0.24), 1, 1)
             p.setBrush(QColor(*(t["good"] if i % 2 else t["dim"])))
             p.drawRoundedRect(QRectF(box.right() - 34, y + rh * 0.38, 26, rh * 0.24), 1, 1)
+        p.setClipping(False)
         p.setPen(qcolor("text"))
         p.setFont(ui_font(13, QFont.Weight.DemiBold))
         p.drawText(QRectF(r.x() + 14, stage.bottom() + 6, r.width() - 40, 22), Qt.AlignmentFlag.AlignVCenter,
@@ -828,11 +890,13 @@ class ThemeCard(QWidget):
 class FontRow(QWidget):
     clicked = Signal(str)
 
-    def __init__(self, key, selected=False):
+    def __init__(self, key, selected=False, config_data=None):
         super().__init__()
         self.key = key
         self.selected = selected
-        self.fonts = Fonts(1.25, key)
+        from ..theme import font_style
+        shift, italic = font_style(config_data or {}, key)
+        self.fonts = Fonts(1.25, key, shift, italic)
         self.setFixedHeight(48)
         self.setCursor(Qt.CursorShape.PointingHandCursor)
 
@@ -906,7 +970,14 @@ class AppearancePage(Page):
         self.o_opacity.changed.connect(lambda v: self._set_outline("opacity", float(v)))
         self.outline_card.add(SettingRow("Opacity", self.o_opacity))
         self.content.addWidget(self.outline_card)
-        self.font_card = Card("Font", "Bundled with the app, nothing is installed on Windows.")
+        self.f_weight = Segmented({"light": "Light", "normal": "Regular", "bold": "Bold", "black": "Black"}, "normal")
+        self.f_weight.changed.connect(lambda v: self._set_font_style("weight", v))
+        self.f_italic = Toggle(False)
+        self.f_italic.toggled.connect(lambda v: self._set_font_style("italic", bool(v)))
+        fs = QWidget()
+        fs.setLayout(hbox(self.f_weight, label("Italic", "muted"), self.f_italic))
+        self.font_card = Card("Font", "Bundled with the app, nothing is installed on Windows. Weight and italic are "
+                                      "remembered for each font.", fs)
         self.font_rows = QVBoxLayout()
         self.font_rows.setSpacing(8)
         self.font_card.add(self.font_rows)
@@ -927,13 +998,43 @@ class AppearancePage(Page):
         self.class_rows.setSpacing(8)
         self.class_card.add(self.class_rows)
         self.content.addWidget(self.class_card)
+        # gamintojų logotipai - žmogaus PNG failai
+        b_logo = button("Open logos folder", "ghost", "folder")
+        b_logo.clicked.connect(self._open_logos)
+        self.logo_card = Card("Car logos", "Shown in the Car column of Standings and Relative. To replace one or add "
+                                           "a missing brand, put a PNG (transparent background works best) into the "
+                                           "logos folder, named like below. Your files win over the built-in ones.",
+                              b_logo)
+        self.logo_grid = QGridLayout()
+        self.logo_grid.setHorizontalSpacing(18)
+        self.logo_grid.setVerticalSpacing(4)
+        self.logo_card.add(self.logo_grid)
+        self.content.addWidget(self.logo_card)
         self.content.addStretch(1)
+
+    def _open_logos(self):
+        from ..logos import folder
+        os.makedirs(folder(), exist_ok=True)
+        open_folder(folder())
+
+    def _fill_logos(self):
+        from ..logos import STORE, brands, user_files
+        clear_layout(self.logo_grid)
+        have = STORE.found()
+        mine = user_files()
+        for i, (name, short, sl) in enumerate(brands()):
+            ok = sl in have or short.lower() in have
+            own = sl in mine or short.lower() in mine
+            t = label(("✓  " if ok else "–  ") + f"{sl}.png" + ("  (yours)" if own else ""), "h3" if ok else "muted")
+            t.setToolTip(f"{name} ({short})" + ("" if ok else " - no logo yet, shows the badge"))
+            self.logo_grid.addWidget(t, i // 4, i % 4)
 
     def on_show(self):
         self._fill_themes()
         self._fill_fonts()
         self._fill_colors()
         self._fill_classes()
+        self._fill_logos()
 
     @staticmethod
     def _wrap(layout):
@@ -973,6 +1074,7 @@ class AppearancePage(Page):
     def _fill_fonts(self):
         clear_layout(self.font_rows)
         cur = self.ctx.config.data.get("font", "montserrat")
+        self._sync_font_style()
         from ..theme import FONT_GROUPS
         for group in FONT_GROUPS:
             keys = [k for k, v in FONT_CHOICES.items() if v[2] == group]
@@ -982,9 +1084,23 @@ class AppearancePage(Page):
             e.setContentsMargins(2, 8, 0, 0)
             self.font_rows.addWidget(e)
             for key in keys:
-                r = FontRow(key, key == cur)
+                r = FontRow(key, key == cur, self.ctx.config.data)
                 r.clicked.connect(self._set_font)
                 self.font_rows.addWidget(r)
+
+    def _sync_font_style(self):
+        cur = self.ctx.config.data.get("font", "montserrat")
+        st = (self.ctx.config.data.get("font_style") or {}).get(cur) or {}
+        self.f_weight.set_value(st.get("weight", "normal"))
+        self.f_italic.set_silent(bool(st.get("italic", False)))
+
+    def _set_font_style(self, key, value):
+        cur = self.ctx.config.data.get("font", "montserrat")
+        st = self.ctx.config.data.setdefault("font_style", {}).setdefault(cur, {})
+        st[key] = value
+        self.ctx.all_widgets_changed()
+        self.center.preview.invalidate()
+        self._fill_fonts()
 
     def _set_font(self, key):
         self.ctx.config.data["font"] = key
@@ -1213,6 +1329,27 @@ class GeneralPage(Page):
         e.add(SettingRow("Snap widgets while dragging", t_snap, "To screen edges, other widgets and an 8 px grid."))
         self.content.addWidget(e)
 
+        up = Card("Updates", "New versions come from the LTH GitHub page. Nothing is downloaded until you click "
+                             "Update, and your settings stay as they are.")
+        t_up = Toggle(bool((d.get("updates") or {}).get("auto", True)))
+        t_up.toggled.connect(lambda v: (d.setdefault("updates", {}).__setitem__("auto", bool(v)),
+                                        self.ctx.save_config_soon()))
+        up.add(SettingRow("Check for updates automatically", t_up,
+                          "When the app starts and every 6 hours, never while you are driving."))
+        self.up_state = label("", "muted", wrap=True)
+        self.b_check = button("Check now", "ghost", "reset")
+        self.b_check.clicked.connect(lambda: (self.ctx.updater.check(manual=True), self._up_refresh()))
+        self.b_update = button("Update & restart", "primary", "download")
+        self.b_update.clicked.connect(self._do_update)
+        self.b_page = button("Release notes", "ghost", "info")
+        self.b_page.clicked.connect(lambda: QDesktopServices.openUrl(QUrl(self.ctx.updater.info["page"]))
+                                    if self.ctx.updater.info else None)
+        up.add(hbox(self.up_state, None, self.b_page, self.b_check, self.b_update))
+        self.content.addWidget(up)
+        self._up_timer = QTimer(self)
+        self._up_timer.setInterval(500)
+        self._up_timer.timeout.connect(self._up_refresh)
+
         tm = Card("Track maps", "Recorded from your first clean lap on each track and saved for next time.")
         b1 = button("Re-record current track", None, "record")
         b1.clicked.connect(self._forget_map)
@@ -1233,6 +1370,47 @@ class GeneralPage(Page):
 
     def on_show(self):
         self.t_auto.set_silent(self.ctx.autostart_enabled())
+        self._up_refresh()
+        self._up_timer.start()
+
+    def hideEvent(self, e):
+        super().hideEvent(e)
+        self._up_timer.stop()
+
+    def _up_refresh(self):
+        from lth_timing import VERSION
+        u = self.ctx.updater
+        from .. import win32
+        self.b_update.setVisible(False)
+        self.b_page.setVisible(bool(u.info))
+        self.b_check.setEnabled(bool(u.repo) and u.state not in ("checking", "downloading"))
+        if win32.is_packaged():
+            self.up_state.setText("Microsoft Store version: updates come through the Store.")
+        elif not u.repo:
+            self.up_state.setText(f"Version {VERSION}. Update checks are not set up in this build.")
+        elif u.state == "checking":
+            self.up_state.setText("Checking...")
+        elif u.state == "downloading":
+            self.up_state.setText(f"Downloading {u.info['version']}...  {u.progress * 100:.0f}%")
+        elif u.state == "ready":
+            self.up_state.setText("Downloaded - restarting...")
+        elif u.newer():
+            if u.needs_full():
+                self.up_state.setText(f"Version {u.info['version']} is out. It needs the full download this time "
+                                      "(click Release notes).")
+            else:
+                self.up_state.setText(f"Version {u.info['version']} is ready to install (you have {VERSION}).")
+                self.b_update.setVisible(True)
+        elif u.state == "error":
+            self.up_state.setText(f"Could not check: {u.error[:120]}")
+        else:
+            self.up_state.setText(f"Version {VERSION} - up to date." if u.last_check else f"Version {VERSION}.")
+
+    def _do_update(self):
+        if self.ctx.editing:
+            self.ctx.toggle_edit()
+        self.ctx.updater.download()
+        self._up_refresh()
 
     def _set(self, k, v):
         self.ctx.config.data[k] = v
@@ -1297,6 +1475,21 @@ class PerformancePage(Page):
         seg.changed.connect(self._fps_cap)
         eco.add(SettingRow("Smooth widgets max", seg, "Standing still (garage, pits, after the finish) they "
                                                       "always slow down to 12 fps."))
+        t_low = Toggle(bool(self.ctx.config.data.get("low_priority", True)))
+
+        def low(v):
+            from .. import win32
+            self.ctx.config.data["low_priority"] = bool(v)
+            win32.set_low_priority(bool(v))
+            self.ctx.save_config_soon()
+        t_low.toggled.connect(low)
+        eco.add(SettingRow("Low priority (recommended)", t_low,
+                           "Windows always gives iRacing the CPU first, so short spikes of LTH Overlays never "
+                           "cost you frames."))
+        b_sp = button("Open CPU spike log", "ghost", "activity")
+        b_sp.clicked.connect(self._open_spikes)
+        eco.add(SettingRow("CPU spikes", b_sp, "When CPU jumps, the app notes what was working at that moment "
+                                               "(perf_spikes.log). Send it to us if spikes bother you."))
         self.content.addWidget(eco)
         wc = Card("Per widget", "CPU used by each visible widget for drawing (share of one core).")
         self.w_grid = QGridLayout()
@@ -1331,6 +1524,16 @@ class PerformancePage(Page):
         self.ch_cpu.set_values([x[0] for x in h])
         self.ch_fps.set_values([x[2] for x in h])
         self._widget_costs()
+
+    def _open_spikes(self):
+        path = os.path.join(app_dir(), "perf_spikes.log")
+        if not os.path.exists(path):
+            try:
+                with open(path, "w", encoding="utf-8") as fh:
+                    fh.write("No CPU spikes noticed yet.\n")
+            except OSError:
+                return
+        QDesktopServices.openUrl(QUrl.fromLocalFile(path))
 
     def _fps_cap(self, v):
         self.ctx.config.data["fps_cap"] = int(v)

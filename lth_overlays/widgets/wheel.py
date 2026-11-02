@@ -133,3 +133,33 @@ class GT3Wheel:
         p.rotate(-math.degrees(steer_rad))  # Qt: teigiamas kampas = pagal laikrodžio rodyklę
         p.drawPixmap(QPointF(-half, -half), pm)
         p.restore()
+
+
+class ImageWheel(GT3Wheel):
+    """Žmogaus pasirinktas vairo paveikslėlis (PNG, vairas tiesiai į viršų). Jei neužsikrauna - GT3 vairas."""
+
+    def __init__(self, path: str):
+        super().__init__()
+        self.path = path
+        from PySide6.QtGui import QImage
+        img = QImage(path)
+        self._src = None if img.isNull() else img
+
+    def pixmap(self, size: float, dpr: float) -> QPixmap:
+        if self._src is None:
+            return super().pixmap(size, dpr)
+        key = (round(size, 1), dpr, "img")
+        if key == self._key and self._pm is not None:
+            return self._pm
+        s = int(math.ceil(size * dpr)) + 2
+        img = self._src.scaled(s, s, Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
+        pm = QPixmap(s, s)
+        pm.setDevicePixelRatio(dpr)
+        pm.fill(Qt.GlobalColor.transparent)
+        q = QPainter(pm)
+        q.setRenderHint(QPainter.RenderHint.SmoothPixmapTransform)
+        img.setDevicePixelRatio(dpr)
+        q.drawImage(QPointF((s - img.width()) / 2 / dpr, (s - img.height()) / 2 / dpr), img)
+        q.end()
+        self._key, self._pm = key, pm
+        return pm

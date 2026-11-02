@@ -419,9 +419,17 @@ def test_flags_widget_ignores_blue_without_lapping_car(oapp, race_snap):
     snap.player.pace_mode = 4
     snap.relative = [r for r in race_snap.relative if r.gap >= 0 or r.is_me]  # už manęs nieko
     w = oapp.widgets["flags"]
+    # v0.7: numatytai iRacing mėlyna rodoma visada (variklis jau atmeta netikrą mėlyną starto metu)
+    w._seen = {}
+    w.cfg["blue_strict"] = False
+    w.push(snap, force=True)
+    assert w._view is not None and w._view[0] == "blue"
+    # griežtas režimas: be lenkiančios mašinos už nugaros - nerodom
+    w.cfg["blue_strict"] = True
     w._seen = {}
     w.push(snap, force=True)
     assert w._view is None or w._view[0] != "blue"
+    w.cfg["blue_strict"] = False
 
 
 # ---------------------------------------------------------------- v0.5: greitas Inputs kelias

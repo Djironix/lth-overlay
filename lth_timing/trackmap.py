@@ -32,6 +32,8 @@ class TrackMap:
         self._last_pct = None
         self._ok = False
         self.progress = 0.0
+        self._partial_n = 0
+        self._partial_cache = None
 
     def _path(self, key):
         return os.path.join(self.folder, f"{key}.json") if self.folder else None
@@ -65,26 +67,31 @@ class TrackMap:
         self._reset_lap()
 
     def update(self, f, t: float):
-        """Kviečiama variklio dažniu. Įrašo tik kol žemėlapio dar nėra."""
+        """Kviečiama variklio dažniu. Įrašo tik kol žemėlapio dar nėra.
+
+        Atlaidu: sustojimas, lėtas važiavimas ar boksų gatvė ratų nebenutraukia (padėtis skaičiuojama toliau,
+        tik boksų gatvėje taškai nerašomi). Iš naujo pradedama tik po teleporto (reset, tow) ar trūkio duomenyse."""
         if self.points is not None or self.key is None:
             self.recording = False
             return
         pct, v, yaw = f.LapDistPct, f.Speed, f.YawNorth
-        usable = (f.IsOnTrack and not f.OnPitRoad and pct is not None and v is not None and yaw is not None
-                  and 0.0 <= pct <= 1.0 and v > 5.0)
-        self.recording = bool(usable)
+        usable = bool(f.IsOnTrack and pct is not None and v is not None and yaw is not None and 0.0 <= pct <= 1.0)
         if not usable:
+            self.recording = False
             self._reset_lap()
             return
+        self.recording = True
         if self._last_t is None:
             self._last_t, self._last_pct = t, pct
             return
         dt = t - self._last_t
-        if dt <= 0 or dt > 0.4:  # trūkis - pradedam iš naujo
+        jump = abs(pct - self._last_pct)
+        wrap = self._last_pct > 0.9 and pct < 0.1
+        if dt <= 0 or dt > 0.4 or (jump > 0.05 and not wrap and jump < 0.95):  # trūkis / teleportas
             self._reset_lap()
             self._last_t, self._last_pct = t, pct
             return
-        wrap = self._last_pct > 0.9 and pct < 0.1
+        v = max(0.0, float(v))
         self._x += v * math.sin(yaw) * dt
         self._y -= v * math.cos(yaw) * dt
         self._last_t = t
@@ -96,12 +103,31 @@ class TrackMap:
             self._xy[:] = np.nan
             self._x = self._y = 0.0
             self._ok = True
+            self._partial_n = 0
+            self._partial_cache = None
         self._last_pct = pct
-        if self._ok:
+        if self._ok and not f.OnPitRoad and v > 1.0:
             b = min(BINS - 1, int(pct * BINS))
             if np.isnan(self._xy[b, 0]):
                 self._xy[b] = (self._x, self._y)
-            self.progress = float(np.count_nonzero(~np.isnan(self._xy[:, 0])) / BINS)
+                self._partial_n += 1
+            self.progress = float(self._partial_n / BINS)
+
+    def partial(self):
+        """Kol įrašoma: jau nubrėžta trasos dalis (BINS, 2), normalizuota 0..1, NaN - dar nevažiuota.
+        Kopija daroma tik kas ~1 % rato, kad momentinė nuotrauka (snapshot) nebūtų brangi."""
+        if self.points is not None or not self._ok or self._partial_n < 8:
+            return None
+        if self._partial_cache is not None and self._partial_cache[0] == self._partial_n // 4:
+            return self._partial_cache[1]
+        xy = self._xy.copy()
+        have = ~np.isnan(xy[:, 0])
+        lo, hi = xy[have].min(axis=0), xy[have].max(axis=0)
+        span = max(float((hi - lo).max()), 1.0)
+        out = (xy - lo) / span
+        out += (1 - (hi - lo) / span) / 2
+        self._partial_cache = (self._partial_n // 4, out)
+        return out
 
     def _finish(self):
         xy = self._xy
@@ -143,3 +169,15 @@ class TrackMap:
         j = (i + 1) % BINS
         k = x - int(x)
         return self.points[i] * (1 - k) + self.points[j] * k
+
+
+def bundled(name: str):
+    """Programos kartu pateikiamas trasos kontūras (BINS, 2) - demo / peržiūrai. None, jei nėra."""
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "lth_overlays", "data",
+                        "tracks", f"{name}.json")
+    try:
+        with open(path, encoding="utf-8") as fh:
+            pts = np.asarray(json.load(fh)["pts"], dtype=float)
+        return pts if pts.shape == (BINS, 2) else None
+    except (OSError, ValueError, KeyError):
+        return None

@@ -17,7 +17,7 @@ APP_DIR_NAME = "LTH Overlays"
 from .registry import (DEFAULT_WIDGETS, ENGINEER_TYPES, RELATIVE_COLUMNS,  # noqa: E402,F401
                        STANDINGS_COLUMNS, WEATHER_FIELDS)
 
-CONFIG_VERSION = 9
+CONFIG_VERSION = 10
 
 DEFAULT_CONFIG = {
     "version": CONFIG_VERSION,
@@ -38,7 +38,6 @@ DEFAULT_CONFIG = {
     "hotkeys": {"edit": "Ctrl+Shift+E", "toggle_all": "Ctrl+Shift+H", "rain_next": "Ctrl+Shift+R"},
     "open_control_center": True,
     "onboarding_done": False,  # pirmo paleidimo tutorialas  # atidaryti Control Center paleidus ranka
-    "setups": {"auto": False},  # LTH setupų automatinis įdiegimas prisijungus prie sesijos
     "fps_cap": 0,  # Eco: visų „smooth“ valdiklių fps riba (0 = be ribos)
     "telemetry": {"record": True, "hz": 30, "auto_save_best": True, "save_sessions": True},  # savo ratų telemetrija
     "obs": {"enabled": False, "port": 8399, "fps": 30},  # OBS Browser Source serveris (tik 127.0.0.1)
@@ -120,11 +119,27 @@ class Config:
                     wf = (ws.get("weather") or {}).get("fields")
                     if isinstance(wf, dict) and wf.get("humidity") is False:
                         wf["humidity"] = True
+            if ver < 10:  # v0.7: Inputs dalys (tvarka + įjungimas) vietoj atskirų jungiklių
+                for prof in (raw.get("profiles") or {}).values():
+                    wi = (prof.get("widgets") or {}).get("inputs")
+                    if isinstance(wi, dict) and any(k in wi for k in ("show_bars", "show_wheel", "show_abs")):
+                        parts = dict(wi.get("parts") or {})
+                        parts.setdefault("bars", bool(wi.get("show_bars", True)))
+                        parts.setdefault("wheel", bool(wi.get("show_wheel", True)))
+                        parts.setdefault("abs", bool(wi.get("show_abs", False)))
+                        wi["parts"] = parts
             # v5: nauji valdikliai ir laukai ateina iš numatytų reikšmių (_merge)
             raw["version"] = CONFIG_VERSION
             self.data = _merge(DEFAULT_CONFIG, raw)
         except (OSError, ValueError):
             self.data = copy.deepcopy(DEFAULT_CONFIG)
+        from .registry import BY_NAME, add_copy
+        good = []
+        for c in self.data.get("copies") or []:  # valdiklių kopijos (Duplicate)
+            if isinstance(c, dict) and c.get("base") in BY_NAME and c.get("name"):
+                add_copy(c["base"], c["name"])
+                good.append({"name": c["name"], "base": c["base"]})
+        self.data["copies"] = good
         for p in self.data["profiles"].values():
             p["widgets"] = _merge(DEFAULT_WIDGETS, p.get("widgets", {}))
 
