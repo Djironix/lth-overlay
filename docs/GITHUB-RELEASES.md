@@ -11,12 +11,12 @@ persikrauna. Nustatymai (`%APPDATA%\LTH Overlays`) lieka.
    (Jei nenori rodyti kodo: kodą laikyk privačiame repo, o išleidimus - atskirame viešame. Parašyk, padėsiu.)
 2. Atsidaryk `lth_overlays/data/update.json` ir įrašyk repo pavadinimą:
    ```json
-   { "repo": "TAVO-VARDAS/lth-overlays" }
+   { "repo": "Djironix/lth-overlay" }
    ```
 3. Įkelk kodą į repo (vieną kartą):
    ```
-   git remote add origin https://github.com/TAVO-VARDAS/lth-overlays.git
-   git push -u origin master
+   git remote add origin https://github.com/Djironix/lth-overlay.git
+   git push -u origin main
    ```
 4. Repo puslapyje: **Settings > Actions > General > Workflow permissions** - pažymėk
    **Read and write permissions** ir išsaugok (kad Actions galėtų sukurti Release).
@@ -27,12 +27,9 @@ persikrauna. Nustatymai (`%APPDATA%\LTH Overlays`) lieka.
 
 1. `lth_timing/__init__.py` - padidink `VERSION` (pvz. `0.7.1`).
 2. `packaging/README.txt` - parašyk skyrių `New in 0.7.1` (jis tampa Release aprašymu).
-3. Commit ir tag:
-   ```
-   git commit -am "v0.7.1"
-   git tag v0.7.1
-   git push && git push --tags
-   ```
+3. Commit ir push, tada vienas iš dviejų:
+   - `git tag v0.7.1 && git push --tags`, arba
+   - repo puslapyje **Actions > Release > Run workflow** (žymė v0.7.1 sukuriama pati).
 4. GitHub Actions pats: paleidžia testus, subuildina
    `LTH-Overlays-0.7.1-win64.zip` (pilnas), `LTH-Overlays-0.7.1-update.zip` + `.sha256` ir sukuria Release.
    Eigą matai repo skiltyje **Actions** (~5-8 min.).

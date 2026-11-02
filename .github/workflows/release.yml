@@ -1,5 +1,6 @@
-# Išleidimas: pažymėk versiją (git tag v0.7.1 && git push --tags) - GitHub pats paleidžia testus,
-# subuildina abu zip ir sukuria Release. Žmonių programos jį pamato per kelias valandas (arba „Check now“).
+# Išleidimas: pažymėk versiją (git tag v0.7.1 && git push --tags) ARBA Actions > Release > Run workflow.
+# GitHub pats paleidžia testus, subuildina abu zip ir sukuria Release (žymė v<VERSION> sukuriama pati).
+# Žmonių programos jį pamato per kelias valandas (arba General > Updates > Check now).
 name: Release
 
 on:
@@ -58,6 +59,7 @@ jobs:
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: v${{ env.VERSION }}
           name: LTH Overlays ${{ env.VERSION }}
           body_path: notes.md
           files: |

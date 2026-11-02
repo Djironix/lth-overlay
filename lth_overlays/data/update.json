@@ -1,4 +1,4 @@
 {
- "repo": "",
- "_help": "GitHub owner/repo with the releases, e.g. lth-lyga/lth-overlays. Empty = no update checks."
+ "repo": "Djironix/lth-overlay",
+ "_help": "GitHub owner/repo with the releases. Empty = no update checks."
 }
